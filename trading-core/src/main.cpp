@@ -362,6 +362,17 @@ int main() {
         double dh_cooldown = env.count("DH_COOLDOWN_SECONDS") ? std::stod(env["DH_COOLDOWN_SECONDS"]) : 30.0;
         double dh_min_secs = env.count("DH_MIN_SECONDS_REMAINING") ? std::stod(env["DH_MIN_SECONDS_REMAINING"]) : 60.0;
 
+        std::string strategy = env.count("STRATEGY") ? env["STRATEGY"] : "both";
+        std::transform(strategy.begin(), strategy.end(), strategy.begin(), ::tolower);
+        const bool use_la = (strategy == "latency_arb" || strategy == "both");
+        const bool use_dh = (strategy == "dump_hedge" || strategy == "both");
+        if (!use_la && !use_dh) {
+            spdlog::critical("STRATEGY must be latency_arb, dump_hedge, or both. Got: {}", strategy);
+            return 1;
+        }
+
+        spdlog::info("Strategy mode: {} | LA: {} | DH: {}",
+                     strategy, use_la ? "on" : "off", use_dh ? "on" : "off");
         spdlog::info("Strategy | DH sum<={:.2f} disc>={:.2f} | LA edge>={:.2f} cd={:.0f}s | Entry {:.2f}-{:.2f}",
                      dh_sum_target, dh_min_discount, la_min_edge, la_cooldown, entry_price_min, entry_price_max);
 
@@ -390,9 +401,14 @@ int main() {
         exec::OrderRouter router(feed_ioc, feed_ctx, store, risk_manager, polymarket_host, polymarket_chain_id, verifying_contract, polymarket_pk, polymarket_signer, polymarket_funder, paper_mode, poly_api_key, poly_api_secret, poly_api_passphrase, neg_risk_exchange);
 
         GammaClient gamma(gamma_ioc, gamma_ctx);
-        auto btc_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "btcusdt");
-        auto eth_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "ethusdt");
-        auto sol_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "solusdt");
+        std::shared_ptr<BinanceFeed> btc_feed;
+        std::shared_ptr<BinanceFeed> eth_feed;
+        std::shared_ptr<BinanceFeed> sol_feed;
+        if (use_la) {
+            btc_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "btcusdt");
+            eth_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "ethusdt");
+            sol_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "solusdt");
+        }
 
         // Feeds will be started after callbacks are registered
 
@@ -403,12 +419,15 @@ int main() {
 
         std::vector<std::unique_ptr<LatencyArbDetector>> la_detectors;
         auto price_resolver = [&gamma](const std::string& token_id, const std::string& side) { return gamma.fetch_token_price(token_id, side); };
-        la_detectors.push_back(std::make_unique<LatencyArbDetector>(store, std::vector<MarketInfo>{}, la_min_edge, la_min_secs, la_cooldown, 2.7, "btc", price_resolver));
-        la_detectors.push_back(std::make_unique<LatencyArbDetector>(store, std::vector<MarketInfo>{}, la_min_edge, la_min_secs, la_cooldown, 2.7, "eth", price_resolver));
-        la_detectors.push_back(std::make_unique<LatencyArbDetector>(store, std::vector<MarketInfo>{}, la_min_edge, la_min_secs, la_cooldown, 2.7, "sol", price_resolver));
+        if (use_la) {
+            la_detectors.push_back(std::make_unique<LatencyArbDetector>(store, std::vector<MarketInfo>{}, la_min_edge, la_min_secs, la_cooldown, 2.7, "btc", price_resolver));
+            la_detectors.push_back(std::make_unique<LatencyArbDetector>(store, std::vector<MarketInfo>{}, la_min_edge, la_min_secs, la_cooldown, 2.7, "eth", price_resolver));
+            la_detectors.push_back(std::make_unique<LatencyArbDetector>(store, std::vector<MarketInfo>{}, la_min_edge, la_min_secs, la_cooldown, 2.7, "sol", price_resolver));
+        }
 
         std::unique_ptr<DumpHedgeDetector> dh_detector;
         auto eval_la_for_asset = [&](const std::string& sym) {
+            if (!use_la) return;
             std::string asset = "btc";
             if (sym.find("eth") != std::string::npos) asset = "eth";
             else if (sym.find("sol") != std::string::npos) asset = "sol";
@@ -434,11 +453,14 @@ int main() {
 
         auto poly_feed = std::make_shared<PolymarketFeed>(feed_ioc, feed_ctx, store);
 
-        btc_feed->set_tick_callback([&](const std::string& sym, double) { eval_la_for_asset(sym); });
-        eth_feed->set_tick_callback([&](const std::string& sym, double) { eval_la_for_asset(sym); });
-        sol_feed->set_tick_callback([&](const std::string& sym, double) { eval_la_for_asset(sym); });
+        if (use_la) {
+            btc_feed->set_tick_callback([&](const std::string& sym, double) { eval_la_for_asset(sym); });
+            eth_feed->set_tick_callback([&](const std::string& sym, double) { eval_la_for_asset(sym); });
+            sol_feed->set_tick_callback([&](const std::string& sym, double) { eval_la_for_asset(sym); });
+        }
 
         poly_feed->set_tick_callback([&](const std::string& token_id) {
+            if (!use_dh) return;
             std::lock_guard<std::mutex> lock(detector_mutex);
             double now_ms = std::chrono::duration<double, std::milli>(std::chrono::system_clock::now().time_since_epoch()).count();
             if (dh_detector) {
@@ -461,9 +483,11 @@ int main() {
         });
 
         // Start feeds only after all callbacks are ready
-        btc_feed->start();
-        eth_feed->start();
-        sol_feed->start();
+        if (use_la) {
+            btc_feed->start();
+            eth_feed->start();
+            sol_feed->start();
+        }
         poly_feed->start();
 
         std::atomic<bool> is_refreshing{false};
@@ -483,14 +507,18 @@ int main() {
                 store.update_markets(all_m);
                 {
                     std::lock_guard<std::mutex> lock(detector_mutex);
-                    for (auto& det : la_detectors) {
-                        det->set_active_markets(all_m);
-                        det->set_entry_price_range(entry_price_min, entry_price_max);
-                        det->set_min_fair_value_strength(la_fair_strength);
-                        det->set_fee_rate(fee_rate);
+                    if (use_la) {
+                        for (auto& det : la_detectors) {
+                            det->set_active_markets(all_m);
+                            det->set_entry_price_range(entry_price_min, entry_price_max);
+                            det->set_min_fair_value_strength(la_fair_strength);
+                            det->set_fee_rate(fee_rate);
+                        }
                     }
-                    dh_detector = std::make_unique<DumpHedgeDetector>(store, all_m, dh_sum_target, dh_min_discount, dh_min_secs, dh_cooldown);
-                    dh_detector->set_fee_rate(fee_rate);
+                    if (use_dh) {
+                        dh_detector = std::make_unique<DumpHedgeDetector>(store, all_m, dh_sum_target, dh_min_discount, dh_min_secs, dh_cooldown);
+                        dh_detector->set_fee_rate(fee_rate);
+                    }
                 }
                 std::vector<std::string> tokens;
                 for (const auto& m : all_m) { tokens.push_back(m.yes_token_id); tokens.push_back(m.no_token_id); }
@@ -566,7 +594,7 @@ int main() {
                 std::thread([&refresh_markets]() { refresh_markets(); }).detach();
             }
             // REST fallback when Binance WS is blocked (common in Docker/region)
-            if (loop_start - last_binance_rest > std::chrono::seconds(2)) {
+            if (use_la && loop_start - last_binance_rest > std::chrono::seconds(2)) {
                 last_binance_rest = loop_start;
                 auto btc = store.get_latest_btc_price();
                 if (!btc || btc->price <= 0) {
