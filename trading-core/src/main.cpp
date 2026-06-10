@@ -362,7 +362,7 @@ int main() {
         double dh_cooldown = env.count("DH_COOLDOWN_SECONDS") ? std::stod(env["DH_COOLDOWN_SECONDS"]) : 30.0;
         double dh_min_secs = env.count("DH_MIN_SECONDS_REMAINING") ? std::stod(env["DH_MIN_SECONDS_REMAINING"]) : 60.0;
 
-        std::string strategy = env.count("STRATEGY") ? env["STRATEGY"] : "both";
+        std::string strategy = env.count("STRATEGY") ? env["STRATEGY"] : "dump_hedge";
         std::transform(strategy.begin(), strategy.end(), strategy.begin(), ::tolower);
         const bool use_la = (strategy == "latency_arb" || strategy == "both");
         const bool use_dh = (strategy == "dump_hedge" || strategy == "both");

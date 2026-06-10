@@ -111,6 +111,7 @@ cp .env.example .env
 docker compose up -d --build
 # 仪表盘 http://<服务器IP>:3001  默认 admin/admin
 # bot WebSocket 映射到宿主机 8080
+# 默认 STRATEGY=dump_hedge（仅 DH）；要开 LA 改为 latency_arb 或 both
 ```
 
 多实例、镜像打包、裸跑编译与 systemd：见 **[deploy/README.md](deploy/README.md)**。
