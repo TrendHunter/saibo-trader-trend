@@ -4,8 +4,9 @@ import { DashboardLayout } from "@/components/layouts/DashboardLayout";
 import { PageContainer } from "@/components/shared/PageContainer";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { GlassCard, CardContent, CardHeader, CardTitle } from "@/components/shared/GlassCard";
+import { BinancePriceChart } from "@/components/dashboard/BinancePriceChart";
+import { PmMarketPanel } from "@/components/dashboard/PmMarketPanel";
 import { TradingPanels } from "@/components/dashboard/TradingPanels";
-import { PriceChart } from "@/components/dashboard/PriceChart";
 import { useLiveState } from "@/hooks/useLiveState";
 import { coreStatusLabel } from "@/lib/coreStatus";
 import { Activity, DollarSign, Briefcase, Percent, TrendingUp } from "lucide-react";
@@ -21,6 +22,8 @@ export default function DashboardPage() {
 
   const pnlColor = liveState.totalPnl >= 0 ? "text-emerald-400" : "text-red-400";
   const coreStatus = coreStatusLabel(liveState.status);
+  const showPm = liveState.strategy === "dump_hedge" || liveState.strategy === "both";
+  const showBinance = liveState.binanceFeedEnabled;
 
   return (
     <DashboardLayout>
@@ -115,13 +118,31 @@ export default function DashboardPage() {
           </GlassCard>
         </div>
 
-        <div className="mb-5">
-          <PriceChart
-            btcPrice={liveState.btcPrice}
-            ethPrice={liveState.ethPrice}
-            solPrice={liveState.solPrice}
-            timestamp={liveState.timestamp}
-          />
+        {showPm && (
+          <div className="mb-4 rounded-xl border border-indigo-500/25 bg-indigo-500/10 px-4 py-2.5 text-[13px] text-indigo-100/90">
+            <strong>DH 模式</strong> — 开仓看 Polymarket YES+NO 合价（目标 ≤ {liveState.dhSumTarget.toFixed(2)}）；上方 Binance 走势仅作参考，与是否开仓无关。
+          </div>
+        )}
+
+        <div className="mb-5 space-y-5">
+          {showBinance && (
+            <BinancePriceChart
+              btcPrice={liveState.btcPrice}
+              ethPrice={liveState.ethPrice}
+              solPrice={liveState.solPrice}
+              timestamp={liveState.timestamp}
+            />
+          )}
+          {showPm && (
+            <PmMarketPanel
+              opportunities={liveState.dhOpportunities}
+              dhSumTarget={liveState.dhSumTarget}
+              dhMinDiscount={liveState.dhMinDiscount}
+              feeRate={liveState.feeRate}
+              timestamp={liveState.timestamp}
+              marketsScanned={liveState.marketsScanned}
+            />
+          )}
         </div>
 
         <TradingPanels liveState={liveState} />

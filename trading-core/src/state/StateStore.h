@@ -32,6 +32,12 @@ public:
     void set_paper_mode(bool pm) { paper_mode_ = pm; }
     bool is_paper_mode() const { return paper_mode_; }
     void set_fee_rate(double rate) { fee_rate_ = rate; }
+    void set_strategy(std::string s) { strategy_ = std::move(s); }
+    void set_dh_config(double sum_target, double min_discount) {
+        dh_sum_target_ = sum_target;
+        dh_min_discount_ = min_discount;
+    }
+    void set_binance_feed_enabled(bool enabled) { binance_feed_enabled_ = enabled; }
 
     void update_btc_price(const PriceTick& tick);
     std::optional<PriceTick> get_latest_btc_price() const;
@@ -61,6 +67,10 @@ private:
     risk::RiskManager* risk_manager_ = nullptr;
     bool paper_mode_ = true;
     double fee_rate_ = 0.018;
+    std::string strategy_ = "dump_hedge";
+    double dh_sum_target_ = 0.95;
+    double dh_min_discount_ = 0.02;
+    bool binance_feed_enabled_ = true;
     mutable std::shared_mutex btc_mutex_;
     PriceTick latest_btc_tick_{};
     std::deque<PriceTick> btc_history_;

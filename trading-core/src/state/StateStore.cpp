@@ -136,6 +136,11 @@ std::string StateStore::get_dashboard_json() const {
         lock.unlock();
         add_asset_data("sol", p, c); 
     }
+
+    root["strategy"] = strategy_.c_str();
+    root["dhSumTarget"] = dh_sum_target_;
+    root["dhMinDiscount"] = dh_min_discount_;
+    root["binanceFeedEnabled"] = binance_feed_enabled_;
     
     if (risk_manager_) {
         double balance = risk_manager_->get_current_balance();
@@ -427,6 +432,7 @@ std::string StateStore::get_dashboard_json() const {
             opps.push_back(mo);
         }
     }
+    root["marketsScanned"] = static_cast<int>(opps.size());
     root["dhOpportunities"] = std::move(opps);
 
     // Telemetry & signal logs

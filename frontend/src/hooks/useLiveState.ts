@@ -77,6 +77,10 @@ export interface LiveState {
   statusReason: string;
   isPaperMode: boolean;
   feeRate: number;
+  strategy: string;
+  binanceFeedEnabled: boolean;
+  dhSumTarget: number;
+  dhMinDiscount: number;
   btcPrice: number;
   ethPrice: number;
   solPrice: number;
@@ -106,6 +110,10 @@ const defaultState: LiveState = {
   statusReason: "",
   isPaperMode: true,
   feeRate: 0.018,
+  strategy: "dump_hedge",
+  binanceFeedEnabled: true,
+  dhSumTarget: 0.95,
+  dhMinDiscount: 0.02,
   btcPrice: 0,
   ethPrice: 0,
   solPrice: 0,
@@ -287,6 +295,10 @@ function normalizeLiveState(raw: Record<string, unknown>): LiveState {
     statusReason: String(raw.statusReason ?? ""),
     isPaperMode: raw.isPaperMode !== false,
     feeRate,
+    strategy: String(raw.strategy ?? "dump_hedge"),
+    binanceFeedEnabled: raw.binanceFeedEnabled !== false,
+    dhSumTarget: toNumber(raw.dhSumTarget, 0.95) || 0.95,
+    dhMinDiscount: toNumber(raw.dhMinDiscount, 0.02) || 0.02,
     btcPrice: toNumber(raw.btcPrice),
     ethPrice: toNumber(raw.ethPrice),
     solPrice: toNumber(raw.solPrice),

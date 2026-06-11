@@ -371,8 +371,17 @@ int main() {
             return 1;
         }
 
-        spdlog::info("Strategy mode: {} | LA: {} | DH: {}",
-                     strategy, use_la ? "on" : "off", use_dh ? "on" : "off");
+        bool binance_feed_enabled = true;
+        if (env.count("BINANCE_FEED_ENABLED")) {
+            std::string bf = env["BINANCE_FEED_ENABLED"];
+            std::transform(bf.begin(), bf.end(), bf.begin(), ::tolower);
+            binance_feed_enabled = !(bf == "false" || bf == "0" || bf == "no" || bf == "off");
+        }
+        const bool use_binance = use_la || binance_feed_enabled;
+
+        spdlog::info("Strategy mode: {} | LA: {} | DH: {} | Binance feed: {}",
+                     strategy, use_la ? "on" : "off", use_dh ? "on" : "off",
+                     use_binance ? (use_la ? "on (LA)" : "on (display)") : "off");
         spdlog::info("Strategy | DH sum<={:.2f} disc>={:.2f} | LA edge>={:.2f} cd={:.0f}s | Entry {:.2f}-{:.2f}",
                      dh_sum_target, dh_min_discount, la_min_edge, la_cooldown, entry_price_min, entry_price_max);
 
@@ -396,6 +405,9 @@ int main() {
         risk_manager.set_fee_rate(fee_rate);
         store.set_risk_manager(&risk_manager);
         store.set_fee_rate(fee_rate);
+        store.set_strategy(strategy);
+        store.set_dh_config(dh_sum_target, dh_min_discount);
+        store.set_binance_feed_enabled(use_binance);
         KellySizer kelly_sizer(0.5, 0.08);
 
         exec::OrderRouter router(feed_ioc, feed_ctx, store, risk_manager, polymarket_host, polymarket_chain_id, verifying_contract, polymarket_pk, polymarket_signer, polymarket_funder, paper_mode, poly_api_key, poly_api_secret, poly_api_passphrase, neg_risk_exchange);
@@ -404,7 +416,7 @@ int main() {
         std::shared_ptr<BinanceFeed> btc_feed;
         std::shared_ptr<BinanceFeed> eth_feed;
         std::shared_ptr<BinanceFeed> sol_feed;
-        if (use_la) {
+        if (use_binance) {
             btc_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "btcusdt");
             eth_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "ethusdt");
             sol_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "solusdt");
@@ -483,7 +495,7 @@ int main() {
         });
 
         // Start feeds only after all callbacks are ready
-        if (use_la) {
+        if (use_binance) {
             btc_feed->start();
             eth_feed->start();
             sol_feed->start();
@@ -594,12 +606,12 @@ int main() {
                 std::thread([&refresh_markets]() { refresh_markets(); }).detach();
             }
             // REST fallback when Binance WS is blocked (common in Docker/region)
-            if (use_la && loop_start - last_binance_rest > std::chrono::seconds(2)) {
+            if (use_binance && loop_start - last_binance_rest > std::chrono::seconds(2)) {
                 last_binance_rest = loop_start;
                 auto btc = store.get_latest_btc_price();
                 if (!btc || btc->price <= 0) {
                     if (!rest_fallback_logged) {
-                        spdlog::warn("Binance WS unavailable — using REST price polling for LA signals");
+                        spdlog::warn("Binance WS unavailable — using REST price polling");
                         rest_fallback_logged = true;
                     }
                     poll_binance_rest();

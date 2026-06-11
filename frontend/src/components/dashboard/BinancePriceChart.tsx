@@ -5,14 +5,14 @@ import { GlassCard, CardContent, CardHeader, CardTitle } from "@/components/shar
 import { createChart, ISeriesApi, LineSeries } from "lightweight-charts";
 import { LineChart } from "lucide-react";
 
-interface PriceChartProps {
+interface BinancePriceChartProps {
   btcPrice: number;
   ethPrice: number;
   solPrice: number;
   timestamp: number;
 }
 
-export function PriceChart({ btcPrice, ethPrice, solPrice, timestamp }: PriceChartProps) {
+export function BinancePriceChart({ btcPrice, ethPrice, solPrice, timestamp }: BinancePriceChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const lineSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const ethSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
@@ -68,7 +68,7 @@ export function PriceChart({ btcPrice, ethPrice, solPrice, timestamp }: PriceCha
         <div className="flex items-center justify-between flex-wrap gap-2">
           <CardTitle className="font-heading text-lg font-semibold tracking-tight text-gradient flex items-center gap-2">
             <LineChart className="h-4 w-4" />
-            实时行情
+            现货走势（Binance）
           </CardTitle>
           <div className="flex gap-4 text-[11px] font-mono text-white/40">
             <span>BTC <span className="text-indigo-300">{btcPrice > 0 ? btcPrice.toFixed(2) : "—"}</span></span>
@@ -76,6 +76,7 @@ export function PriceChart({ btcPrice, ethPrice, solPrice, timestamp }: PriceCha
             <span>SOL <span className="text-teal-400">{solPrice > 0 ? solPrice.toFixed(2) : "—"}</span></span>
           </div>
         </div>
+        <p className="text-[11px] text-white/35 mt-2">仅用于仪表盘展示，与 STRATEGY 独立；关闭 LA 时不会据此下单。</p>
       </CardHeader>
       <CardContent>
         <div ref={chartContainerRef} className="w-full h-[280px]" />
