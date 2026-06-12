@@ -38,6 +38,9 @@ std::optional<DumpHedgeSignal> DumpHedgeDetector::evaluate(double current_time_m
             }
         }
 
+        if (market.window_minutes == 5 && !state_store_.dh_enable_5m()) continue;
+        if (market.window_minutes == 15 && !state_store_.dh_enable_15m()) continue;
+
         // Check time remaining
         double seconds_remaining = market.end_date_ts - (current_time_ms / 1000.0);
         if (seconds_remaining < min_seconds_remaining_) {

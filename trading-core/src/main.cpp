@@ -319,6 +319,132 @@ void check_and_close_dh_positions(
     }
 }
 
+static bool parse_config_bool(const std::string& v) {
+    std::string lower = v;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    return !(lower == "false" || lower == "0" || lower == "no" || lower == "off");
+}
+
+static void apply_runtime_config(
+    const std::string& path,
+    risk::RiskManager& risk_manager,
+    StateStore& store,
+    std::mutex& detector_mutex,
+    std::unique_ptr<DumpHedgeDetector>& dh_detector
+) {
+    std::ifstream file(path);
+    if (!file.is_open()) return;
+
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    file.close();
+
+    boost::json::value jv;
+    try {
+        jv = boost::json::parse(content);
+    } catch (const std::exception& e) {
+        spdlog::warn("Runtime config parse error: {}", e.what());
+        std::remove(path.c_str());
+        return;
+    }
+
+    auto& obj = jv.as_object();
+
+    if (obj.contains("control") && obj.at("control").is_string()) {
+        std::string action = std::string(obj.at("control").as_string());
+        std::string reason = obj.contains("reason") ? std::string(obj.at("reason").as_string()) : "Web control";
+        if (action == "pause") {
+            risk_manager.pause(reason);
+            store.push_telemetry(fmt::format("CONFIG PAUSE | {}", reason));
+        } else if (action == "resume") {
+            if (risk_manager.resume()) {
+                store.push_telemetry("CONFIG RESUME | trading enabled");
+            }
+        } else if (action == "reset_kill") {
+            if (risk_manager.reset_kill_switch(true)) {
+                store.push_telemetry("CONFIG RESET_KILL | kill switch cleared");
+            }
+        }
+    }
+
+    if (obj.contains("patch") && obj.at("patch").is_object()) {
+        const auto& patch = obj.at("patch").as_object();
+        double sum_target = store.get_dh_sum_target();
+        double min_discount = store.get_dh_min_discount();
+        double cooldown = store.get_dh_cooldown_seconds();
+        double min_secs = store.get_dh_min_seconds_remaining();
+        bool dh_changed = false;
+
+        for (const auto& [key, val] : patch) {
+            if (!val.is_string()) continue;
+            std::string k = std::string(key);
+            std::string v = std::string(val.as_string());
+            try {
+                if (k == "RISK_MAX_POSITION_FRACTION") {
+                    risk_manager.set_max_position_fraction(std::stod(v));
+                    store.push_telemetry(fmt::format("CONFIG RISK_MAX_POSITION_FRACTION={}", v));
+                } else if (k == "RISK_DAILY_LOSS_LIMIT") {
+                    risk_manager.set_daily_loss_limit(std::stod(v));
+                    store.push_telemetry(fmt::format("CONFIG RISK_DAILY_LOSS_LIMIT={}", v));
+                } else if (k == "RISK_TOTAL_DRAWDOWN_KILL") {
+                    risk_manager.set_total_drawdown_kill(std::stod(v));
+                    store.push_telemetry(fmt::format("CONFIG RISK_TOTAL_DRAWDOWN_KILL={}", v));
+                } else if (k == "RISK_MAX_CONCURRENT_POSITIONS") {
+                    risk_manager.set_max_concurrent_positions(std::stoi(v));
+                    store.push_telemetry(fmt::format("CONFIG RISK_MAX_CONCURRENT_POSITIONS={}", v));
+                } else if (k == "FEE_RATE") {
+                    double fr = std::stod(v);
+                    risk_manager.set_fee_rate(fr);
+                    store.set_fee_rate(fr);
+                    store.push_telemetry(fmt::format("CONFIG FEE_RATE={}", v));
+                } else if (k == "DH_SUM_TARGET") {
+                    sum_target = std::stod(v);
+                    dh_changed = true;
+                } else if (k == "DH_MIN_DISCOUNT") {
+                    min_discount = std::stod(v);
+                    dh_changed = true;
+                } else if (k == "DH_COOLDOWN_SECONDS") {
+                    cooldown = std::stod(v);
+                    dh_changed = true;
+                } else if (k == "DH_MIN_SECONDS_REMAINING") {
+                    min_secs = std::stod(v);
+                    dh_changed = true;
+                } else if (k == "BINANCE_FEED_ENABLED") {
+                    bool enabled = parse_config_bool(v);
+                    store.set_binance_feed_enabled(enabled);
+                    store.push_telemetry(fmt::format("CONFIG BINANCE_FEED_ENABLED={}", enabled ? "true" : "false"));
+                } else if (k == "DH_ENABLE_5M") {
+                    bool enabled = parse_config_bool(v);
+                    store.set_dh_window_enabled(enabled, store.dh_enable_15m());
+                    store.push_telemetry(fmt::format("CONFIG DH_ENABLE_5M={}", enabled ? "true" : "false"));
+                } else if (k == "DH_ENABLE_15M") {
+                    bool enabled = parse_config_bool(v);
+                    store.set_dh_window_enabled(store.dh_enable_5m(), enabled);
+                    store.push_telemetry(fmt::format("CONFIG DH_ENABLE_15M={}", enabled ? "true" : "false"));
+                }
+            } catch (const std::exception& e) {
+                spdlog::warn("Failed to apply config {}={}: {}", k, v, e.what());
+            }
+        }
+
+        if (dh_changed) {
+            store.set_dh_config(sum_target, min_discount);
+            store.set_dh_timing(cooldown, min_secs);
+            std::lock_guard<std::mutex> lock(detector_mutex);
+            if (dh_detector) {
+                dh_detector->set_sum_target(sum_target);
+                dh_detector->set_min_discount(min_discount);
+                dh_detector->set_cooldown_seconds(cooldown);
+                dh_detector->set_min_seconds_remaining(min_secs);
+            }
+            store.push_telemetry(fmt::format(
+                "CONFIG DH | sum<={:.3f} disc>={:.3f} cd={:.0f}s min_rem={:.0f}s",
+                sum_target, min_discount, cooldown, min_secs));
+        }
+    }
+
+    std::remove(path.c_str());
+}
+
 int main() {
     try {
         auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>("bot.log", true);
@@ -482,6 +608,10 @@ int main() {
         store.set_fee_rate(fee_rate);
         store.set_strategy(strategy);
         store.set_dh_config(dh_sum_target, dh_min_discount);
+        store.set_dh_timing(dh_cooldown, dh_min_secs);
+        store.set_dh_window_enabled(
+            env_flag_true(env, "DH_ENABLE_5M", true),
+            env_flag_true(env, "DH_ENABLE_15M", true));
         store.set_binance_feed_enabled(binance_feed_enabled);
 
         exec::OrderRouter router(feed_ioc, feed_ctx, store, risk_manager, polymarket_host, polymarket_chain_id, verifying_contract, polymarket_pk, polymarket_signer, polymarket_funder, paper_mode, poly_api_key, poly_api_secret, poly_api_passphrase, neg_risk_exchange);
@@ -515,7 +645,7 @@ int main() {
                 if (p.asset == signal->asset) return;
             }
 
-            double max_allowed_usdc = risk_manager.get_current_balance() * max_pos;
+            double max_allowed_usdc = risk_manager.get_current_balance() * risk_manager.get_max_position_fraction();
             double size_shares = max_allowed_usdc / signal->combined_price;
             if (!risk_manager.can_open_dh_position(signal->combined_price * size_shares).first) return;
 
@@ -642,6 +772,7 @@ int main() {
                 }
             }
             risk_manager.is_trading_allowed(); // Trigger resume checks even if no signals fire
+            apply_runtime_config("logs/runtime_config.json", risk_manager, store, detector_mutex, dh_detector);
             check_and_close_dh_positions(risk_manager, store, auto_redeem);
             if (paper_mode && paper_state_persist && loop_start - last_paper_save > std::chrono::seconds(10)) {
                 last_paper_save = loop_start;

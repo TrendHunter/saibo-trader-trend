@@ -85,6 +85,14 @@ export interface LiveState {
   binanceFeedEnabled: boolean;
   dhSumTarget: number;
   dhMinDiscount: number;
+  dhCooldownSeconds: number;
+  dhMinSecondsRemaining: number;
+  dhEnable5m: boolean;
+  dhEnable15m: boolean;
+  riskMaxPositionFraction: number;
+  riskDailyLossLimit: number;
+  riskTotalDrawdownKill: number;
+  riskMaxConcurrentPositions: number;
   btcPrice: number;
   ethPrice: number;
   solPrice: number;
@@ -118,6 +126,14 @@ const defaultState: LiveState = {
   binanceFeedEnabled: true,
   dhSumTarget: 0.95,
   dhMinDiscount: 0.02,
+  dhCooldownSeconds: 30,
+  dhMinSecondsRemaining: 60,
+  dhEnable5m: true,
+  dhEnable15m: true,
+  riskMaxPositionFraction: 0.08,
+  riskDailyLossLimit: 0.2,
+  riskTotalDrawdownKill: 0.4,
+  riskMaxConcurrentPositions: 3,
   btcPrice: 0,
   ethPrice: 0,
   solPrice: 0,
@@ -314,6 +330,14 @@ function normalizeLiveState(raw: Record<string, unknown>): LiveState {
     binanceFeedEnabled: raw.binanceFeedEnabled !== false,
     dhSumTarget: toNumber(raw.dhSumTarget, 0.95) || 0.95,
     dhMinDiscount: toNumber(raw.dhMinDiscount, 0.02) || 0.02,
+    dhCooldownSeconds: toNumber(raw.dhCooldownSeconds, 30) || 30,
+    dhMinSecondsRemaining: toNumber(raw.dhMinSecondsRemaining, 60) || 60,
+    dhEnable5m: raw.dhEnable5m !== false,
+    dhEnable15m: raw.dhEnable15m !== false,
+    riskMaxPositionFraction: toNumber(raw.riskMaxPositionFraction, 0.08) || 0.08,
+    riskDailyLossLimit: toNumber(raw.riskDailyLossLimit, 0.2) || 0.2,
+    riskTotalDrawdownKill: toNumber(raw.riskTotalDrawdownKill, 0.4) || 0.4,
+    riskMaxConcurrentPositions: toNumber(raw.riskMaxConcurrentPositions, 3) || 3,
     btcPrice: toNumber(raw.btcPrice),
     ethPrice: toNumber(raw.ethPrice),
     solPrice: toNumber(raw.solPrice),

@@ -140,6 +140,10 @@ std::string StateStore::get_dashboard_json() const {
     root["strategy"] = strategy_.c_str();
     root["dhSumTarget"] = dh_sum_target_;
     root["dhMinDiscount"] = dh_min_discount_;
+    root["dhCooldownSeconds"] = dh_cooldown_seconds_;
+    root["dhMinSecondsRemaining"] = dh_min_seconds_remaining_;
+    root["dhEnable5m"] = dh_enable_5m_;
+    root["dhEnable15m"] = dh_enable_15m_;
     root["binanceFeedEnabled"] = binance_feed_enabled_;
     
     if (risk_manager_) {
@@ -172,6 +176,10 @@ std::string StateStore::get_dashboard_json() const {
         root["isPaperMode"] = paper_mode_;
         root["startingBalance"] = start;
         root["feeRate"] = fee_rate_;
+        root["riskMaxPositionFraction"] = risk_manager_->get_max_position_fraction();
+        root["riskDailyLossLimit"] = risk_manager_->get_daily_loss_limit();
+        root["riskTotalDrawdownKill"] = risk_manager_->get_total_drawdown_kill();
+        root["riskMaxConcurrentPositions"] = risk_manager_->get_max_concurrent_positions();
 
         std::vector<MarketInfo> markets_snapshot;
         { std::shared_lock lock(market_mutex_); markets_snapshot = markets_; }
