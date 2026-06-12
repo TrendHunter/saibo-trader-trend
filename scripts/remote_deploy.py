@@ -155,6 +155,27 @@ def main() -> int:
                 run(client, step, timeout=300)
             return 0
 
+        if mode == "set-auth":
+            user = sys.argv[2] if len(sys.argv) > 2 else "zhan"
+            password = sys.argv[3] if len(sys.argv) > 3 else "qilai"
+            web_env = (
+                f"AUTH_USERNAME={user}\n"
+                f"AUTH_PASSWORD={password}\n"
+                f"NEXTAUTH_URL=http://{HOST}:3001\n"
+            )
+            sftp = client.open_sftp()
+            with sftp.file(f"{PROJ}/web.env", "w") as f:
+                f.write(web_env)
+            sftp.close()
+            restart_sh = ROOT / "scripts" / "server_restart_web.sh"
+            remote = f"{PROJ}/server_restart_web.sh"
+            sftp = client.open_sftp()
+            sftp.put(str(restart_sh), remote)
+            sftp.close()
+            run(client, f"chmod +x '{remote}' && bash '{remote}'", timeout=300)
+            print(f"Web login set to {user} / (password updated)", file=sys.stderr)
+            return 0
+
         if mode == "web":
             web_sh = ROOT / "scripts" / "server_start_web.sh"
             remote_web = f"{PROJ}/server_start_web.sh"
