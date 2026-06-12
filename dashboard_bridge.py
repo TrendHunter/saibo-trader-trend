@@ -26,6 +26,65 @@ CORE_CMD = ["./build/trading-core.exe"] if os.name == "nt" else ["./build/tradin
 
 clients = set()
 latest_data = "{}"
+_core_ready_printed = False
+
+
+def _print_startup_banner() -> None:
+    cfg = public_config()
+    pre = _read_preflight()
+    mode = (pre.get("mode") or ("paper" if os.getenv("PAPER_MODE", "true").lower() != "false" else "live")).upper()
+    ok = pre.get("ok", True)
+    mark = "✅" if ok else "⚠️"
+    print(f"\n{mark} Bridge 就绪 | 模式 {mode} | WS :{WS_PORT} | API :{HTTP_PORT}", file=sys.stderr)
+    if pre.get("wallet", {}).get("funder"):
+        w = pre["wallet"]
+        print(
+            f"   钱包 funder={w.get('funder')} signer={w.get('signer')} sigType={w.get('signature_type')}",
+            file=sys.stderr,
+        )
+    if cfg:
+        print(
+            f"   DH sum≤{cfg.get('DH_SUM_TARGET', '?')}  "
+            f"5m={cfg.get('DH_ENABLE_5M', '?')}  15m={cfg.get('DH_ENABLE_15M', '?')}",
+            file=sys.stderr,
+        )
+    print("", file=sys.stderr)
+
+
+def _maybe_print_core_ready(line: str) -> None:
+    global _core_ready_printed
+    if _core_ready_printed:
+        return
+    try:
+        d = json.loads(line)
+    except json.JSONDecodeError:
+        return
+    if "strategy" not in d or "balance" not in d:
+        return
+    _core_ready_printed = True
+    paper = d.get("isPaperMode", True)
+    bal = float(d.get("balance") or 0)
+    open_n = d.get("openCount", 0)
+    status = d.get("statusReason") or d.get("status", 0)
+    assets_5m = [
+        a for a, k in (("BTC", "dhEnable5mBtc"), ("ETH", "dhEnable5mEth"), ("SOL", "dhEnable5mSol"))
+        if d.get(k, True) and d.get("dhEnable5m", True)
+    ]
+    assets_15m = [
+        a for a, k in (("BTC", "dhEnable15mBtc"), ("ETH", "dhEnable15mEth"))
+        if d.get(k, True) and d.get("dhEnable15m", True)
+    ]
+    fee = "动态" if d.get("useDynamicFees") else "扁平"
+    print(
+        f"[CORE 就绪] {'纸面' if paper else '实盘'} | 余额 ${bal:.2f} | 持仓 {open_n} | 状态 {status}",
+        file=sys.stderr,
+    )
+    print(
+        f"            5m[{' '.join(assets_5m) or '关'}]  "
+        f"15m[{' '.join(assets_15m) or '关'}]  "
+        f"费率={fee}  市场={d.get('marketsScanned', 0)}",
+        file=sys.stderr,
+    )
 
 
 def _read_preflight() -> dict:
@@ -38,6 +97,8 @@ def _read_preflight() -> dict:
 
 
 def _run_preflight() -> None:
+    if os.getenv("PREFLIGHT_SKIP", "").strip().lower() in ("1", "true", "yes"):
+        return
     script = Path(__file__).resolve().parent / "live_preflight.py"
     if not script.is_file():
         return
@@ -170,9 +231,10 @@ def run_core():
         line = line.strip()
         if line.startswith("{") and line.endswith("}"):
             latest_data = line
+            _maybe_print_core_ready(line)
             asyncio.run_coroutine_threadsafe(broadcast(line), loop)
         else:
-            print(f"[CORE INFO] {line}")
+            print(f"[CORE INFO] {line}", file=sys.stderr)
 
 
 async def main():
@@ -180,6 +242,7 @@ async def main():
     loop = asyncio.get_running_loop()
 
     _run_preflight()
+    _print_startup_banner()
     threading.Thread(target=run_http_server, daemon=True).start()
 
     async with websockets.serve(handler, WS_HOST, WS_PORT):

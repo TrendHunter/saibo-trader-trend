@@ -33,4 +33,4 @@ echo "[entrypoint] Startup preflight (wallet / EIP-712 / fee model)..."
 python3 live_preflight.py || true
 
 echo "[entrypoint] Starting dashboard bridge + C++ trading core..."
-exec python3 dashboard_bridge.py
+exec python3 start_bot.py --skip-preflight
