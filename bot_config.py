@@ -83,6 +83,20 @@ def _parse_bool(text: str) -> str:
     raise ValueError(f"{text!r} must be true/false")
 
 
+def _parse_float(text: str, key: str) -> float:
+    raw = text.strip()
+    lowered = raw.lower()
+    if not raw or lowered in ("undefined", "null", "nan"):
+        raise ValueError(f"{key} 无效，请刷新页面后重试")
+    try:
+        num = float(raw)
+    except ValueError:
+        raise ValueError(f"{key} 必须是有效数字")
+    if num != num:  # NaN
+        raise ValueError(f"{key} 无效，请刷新页面后重试")
+    return num
+
+
 def _validate_patch(patch: dict[str, Any]) -> dict[str, str]:
     cleaned: dict[str, str] = {}
     for key, value in patch.items():
@@ -92,7 +106,7 @@ def _validate_patch(patch: dict[str, Any]) -> dict[str, str]:
         if key in BOOL_KEYS:
             text = _parse_bool(text)
         elif key == "RISK_MAX_CONCURRENT_POSITIONS":
-            n = int(float(text))
+            n = int(_parse_float(text, key))
             if n < 1 or n > 50:
                 raise ValueError("RISK_MAX_CONCURRENT_POSITIONS must be 1-50")
             text = str(n)
@@ -103,7 +117,7 @@ def _validate_patch(patch: dict[str, Any]) -> dict[str, str]:
             "DH_MIN_SECONDS_REMAINING",
             "FEE_RATE",
         ):
-            num = float(text)
+            num = _parse_float(text, key)
             if key == "RISK_MAX_POSITION_FRACTION" and not (0.01 <= num <= 1.0):
                 raise ValueError("RISK_MAX_POSITION_FRACTION must be 0.01-1.0")
             if key == "RISK_DAILY_LOSS_LIMIT" and not (0.01 <= num <= 1.0):

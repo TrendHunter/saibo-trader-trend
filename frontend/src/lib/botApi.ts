@@ -34,7 +34,15 @@ export async function fetchBotConfig() {
 export async function updateBotConfig(patch: Record<string, string | number>, user: string) {
   const normalized: Record<string, string> = {};
   for (const [k, v] of Object.entries(patch)) {
-    normalized[k] = String(v);
+    if (v === undefined || v === null) continue;
+    const text = String(v).trim();
+    if (!text || text === "undefined" || text === "NaN") {
+      throw new Error(`无效参数 ${k}`);
+    }
+    normalized[k] = text;
+  }
+  if (!Object.keys(normalized).length) {
+    throw new Error("没有可保存的配置项");
   }
   return botFetch("/api/config", {
     method: "POST",

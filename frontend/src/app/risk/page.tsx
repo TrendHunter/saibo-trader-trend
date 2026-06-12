@@ -11,6 +11,21 @@ import { useEffect, useState } from "react";
 import { ShieldAlert } from "lucide-react";
 import { useLiveState } from "@/hooks/useLiveState";
 
+function toSliderArray(val: unknown): number[] {
+  if (val === null || val === undefined) return [];
+  if (Array.isArray(val)) {
+    return val.map((n) => Number(n)).filter((n) => Number.isFinite(n));
+  }
+  const n = Number(val);
+  return Number.isFinite(n) ? [n] : [];
+}
+
+/** Slider state may be number[] or a bare number if base-ui omits the array wrapper. */
+function sliderScalar(val: number | number[], fallback: number): number {
+  const v = Array.isArray(val) ? val[0] : val;
+  return Number.isFinite(v) ? v : fallback;
+}
+
 export default function RiskPage() {
   const live = useLiveState();
   const [maxPosition, setMaxPosition] = useState([8]);
@@ -21,10 +36,10 @@ export default function RiskPage() {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    setMaxPosition([Math.round(live.riskMaxPositionFraction * 100)]);
-    setDailyLoss([Math.round(live.riskDailyLossLimit * 100)]);
-    setDrawdownKill([Math.round(live.riskTotalDrawdownKill * 100)]);
-    setMaxConcurrent([live.riskMaxConcurrentPositions]);
+    setMaxPosition([Math.round(sliderScalar(live.riskMaxPositionFraction, 0.08) * 100)]);
+    setDailyLoss([Math.round(sliderScalar(live.riskDailyLossLimit, 0.2) * 100)]);
+    setDrawdownKill([Math.round(sliderScalar(live.riskTotalDrawdownKill, 0.4) * 100)]);
+    setMaxConcurrent([Math.round(sliderScalar(live.riskMaxConcurrentPositions, 3))]);
   }, [
     live.riskMaxPositionFraction,
     live.riskDailyLossLimit,
@@ -36,15 +51,19 @@ export default function RiskPage() {
     setLoading(true);
     setMessage("");
     try {
+      const posPct = sliderScalar(maxPosition, 8);
+      const lossPct = sliderScalar(dailyLoss, 20);
+      const killPct = sliderScalar(drawdownKill, 40);
+      const concurrent = sliderScalar(maxConcurrent, 3);
       const res = await fetch("/api/bot/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           patch: {
-            RISK_MAX_POSITION_FRACTION: (maxPosition[0] / 100).toFixed(4),
-            RISK_DAILY_LOSS_LIMIT: (dailyLoss[0] / 100).toFixed(4),
-            RISK_TOTAL_DRAWDOWN_KILL: (drawdownKill[0] / 100).toFixed(4),
-            RISK_MAX_CONCURRENT_POSITIONS: String(maxConcurrent[0]),
+            RISK_MAX_POSITION_FRACTION: (posPct / 100).toFixed(4),
+            RISK_DAILY_LOSS_LIMIT: (lossPct / 100).toFixed(4),
+            RISK_TOTAL_DRAWDOWN_KILL: (killPct / 100).toFixed(4),
+            RISK_MAX_CONCURRENT_POSITIONS: String(Math.round(concurrent)),
           },
         }),
       });
@@ -106,9 +125,9 @@ export default function RiskPage() {
           <CardContent className="space-y-4">
             <div className="flex justify-between items-center mb-2">
               <Label className="text-white/90 font-medium text-[14px]">数值</Label>
-              <span className="font-mono text-2xl font-semibold text-white">{maxPosition[0]}%</span>
+              <span className="font-mono text-2xl font-semibold text-white">{sliderScalar(maxPosition, 8)}%</span>
             </div>
-            <Slider value={maxPosition} onValueChange={(val) => setMaxPosition(val as number[])} max={50} step={1} className="py-4" />
+            <Slider value={maxPosition} onValueChange={(val) => setMaxPosition(toSliderArray(val))} max={50} step={1} className="py-4" />
           </CardContent>
         </GlassCard>
 
@@ -122,9 +141,9 @@ export default function RiskPage() {
           <CardContent className="space-y-4">
             <div className="flex justify-between items-center mb-2">
               <Label className="text-white/90 font-medium text-[14px]">数量</Label>
-              <span className="font-mono text-2xl font-semibold text-white">{maxConcurrent[0]}</span>
+              <span className="font-mono text-2xl font-semibold text-white">{sliderScalar(maxConcurrent, 3)}</span>
             </div>
-            <Slider value={maxConcurrent} onValueChange={(val) => setMaxConcurrent(val as number[])} min={1} max={20} step={1} className="py-4" />
+            <Slider value={maxConcurrent} onValueChange={(val) => setMaxConcurrent(toSliderArray(val))} min={1} max={20} step={1} className="py-4" />
           </CardContent>
         </GlassCard>
 
@@ -138,9 +157,9 @@ export default function RiskPage() {
           <CardContent className="space-y-4">
             <div className="flex justify-between items-center mb-2">
               <Label className="text-white/90 font-medium text-[14px]">数值</Label>
-              <span className="font-mono text-2xl font-semibold text-amber-400">-{dailyLoss[0]}%</span>
+              <span className="font-mono text-2xl font-semibold text-amber-400">-{sliderScalar(dailyLoss, 20)}%</span>
             </div>
-            <Slider value={dailyLoss} onValueChange={(val) => setDailyLoss(val as number[])} max={100} step={1} className="py-4" />
+            <Slider value={dailyLoss} onValueChange={(val) => setDailyLoss(toSliderArray(val))} max={100} step={1} className="py-4" />
           </CardContent>
         </GlassCard>
 
@@ -154,11 +173,11 @@ export default function RiskPage() {
           <CardContent className="space-y-4">
             <div className="flex justify-between items-center mb-2">
               <Label className="text-red-400/80 font-bold text-[14px]">数值</Label>
-              <span className="font-mono text-2xl font-bold text-red-400">-{drawdownKill[0]}%</span>
+              <span className="font-mono text-2xl font-bold text-red-400">-{sliderScalar(drawdownKill, 40)}%</span>
             </div>
             <Slider
               value={drawdownKill}
-              onValueChange={(val) => setDrawdownKill(val as number[])}
+              onValueChange={(val) => setDrawdownKill(toSliderArray(val))}
               max={100}
               step={1}
               className="[&_[role=slider]]:bg-red-400 [&_[role=slider]]:border-red-400 py-4"
