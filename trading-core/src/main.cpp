@@ -1,7 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <string>
-#include <unordered_map>
+#include <unordered_set>
 #include <spdlog/spdlog.h>
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
@@ -14,8 +14,6 @@
 #include "feeds/PolymarketFeed.h"
 #include "feeds/GammaClient.h"
 #include "risk/RiskManager.h"
-#include "risk/KellySizer.h"
-#include "signals/LatencyArbDetector.h"
 #include "signals/DumpHedgeDetector.h"
 #include "exec/OrderRouter.h"
 #include "state/PaperStateStore.h"
@@ -117,36 +115,30 @@ double fetch_usdc_balance_for_contract(const std::string& funder_address, const 
 }
 
 double fetch_usdc_balance(const std::string& funder_address) {
-    // Try USDC.e first (bridged), then native USDC
+    // pUSD (V2 collateral), USDC.e (legacy), native USDC
+    double bal_pusd = fetch_usdc_balance_for_contract(funder_address, "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb", "pUSD");
+    if (bal_pusd >= 0) {
+        spdlog::info("pUSD balance: ${:.2f}", bal_pusd);
+    }
+
     double bal = fetch_usdc_balance_for_contract(funder_address, "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "USDC.e");
     if (bal >= 0) {
         spdlog::info("USDC.e balance: ${:.2f}", bal);
     }
-    
+
     double bal2 = fetch_usdc_balance_for_contract(funder_address, "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", "USDC");
     if (bal2 >= 0) {
         spdlog::info("USDC (native) balance: ${:.2f}", bal2);
     }
-    
-    // Return the sum of both (user might have funds in either)
+
     double total = 0;
+    if (bal_pusd >= 0) total += bal_pusd;
     if (bal >= 0) total += bal;
     if (bal2 >= 0) total += bal2;
-    
-    if (bal < 0 && bal2 < 0) return -1; // Both failed
+
+    if (bal_pusd < 0 && bal < 0 && bal2 < 0) return -1;
     return total;
 }
-
-struct ExitConfig {
-    double near_win_price = 0.92;
-    double near_loss_price = 0.08;
-    double take_profit_price = 0.72;
-    double take_profit_pnl = 0.15;
-    double stop_loss_pnl = -0.18;
-    double position_timeout_seconds = 270.0; // 4.5 minutes
-    double trailing_stop_activation = 0.06;
-    double trailing_stop_distance = 0.04;
-};
 
 std::unordered_map<std::string, std::string> load_env(const std::string& filepath) {
     std::unordered_map<std::string, std::string> env;
@@ -175,88 +167,154 @@ std::unordered_map<std::string, std::string> load_env(const std::string& filepat
     return env;
 }
 
-void check_and_close_positions(risk::RiskManager& risk_manager, StateStore& store, exec::OrderRouter& router, const ExitConfig& cfg) {
-    auto now = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
-    
-    // 1. Process Latency Arb (LA) positions - with Early Exit logic
-    auto open_la = risk_manager.get_open_positions();
-    for (auto& [id, p] : open_la) {
-        if (p.strategy != "LA") continue;
+static std::unordered_set<std::string> g_redeem_triggered;
+static std::mutex g_redeem_mutex;
 
-        auto live_bid = store.get_token_bid(p.token_id);
-        double current_price = live_bid ? live_bid->price : 0.0;
-        double current_pnl_pct = (p.entry_price > 0) ? (current_price - p.entry_price) / p.entry_price : 0.0;
-        double age = now - p.opened_at;
+static bool env_flag_true(const std::unordered_map<std::string, std::string>& env, const std::string& key, bool default_val) {
+    auto it = env.find(key);
+    if (it == env.end()) return default_val;
+    std::string v = it->second;
+    std::transform(v.begin(), v.end(), v.begin(), ::tolower);
+    if (v == "false" || v == "0" || v == "no" || v == "off") return false;
+    if (v == "true" || v == "1" || v == "yes" || v == "on") return true;
+    return default_val;
+}
 
-        // Update peak price
-        if (current_price > p.peak_price) {
-            p.peak_price = current_price;
-            risk_manager.update_peak_price(id, current_price);
-        }
-        
-        double peak_pnl_pct = (p.entry_price > 0) ? (p.peak_price - p.entry_price) / p.entry_price : 0.0;
-        double drawdown_from_peak = (p.peak_price > 0) ? (p.peak_price - current_price) / p.peak_price : 0.0;
+static void sync_live_balance(risk::RiskManager& risk_manager) {
+#ifdef _WIN32
+    FILE* pipe = popen("python fetch_balance.py", "r");
+#else
+    FILE* pipe = popen("python3 fetch_balance.py 2>/dev/null", "r");
+#endif
+    if (!pipe) return;
+    char buf[128];
+    if (fgets(buf, sizeof(buf), pipe)) {
+        try {
+            double new_bal = std::stod(std::string(buf));
+            if (new_bal > 0) risk_manager.update_balance(new_bal);
+        } catch (...) {}
+    }
+    pclose(pipe);
+}
 
-        bool should_exit = false;
-        std::string exit_reason = "";
-
-        if (now >= p.end_date_ts) {
-            should_exit = true;
-            exit_reason = "EXPIRED";
-        } else if (cfg.stop_loss_pnl < 0 && current_pnl_pct <= cfg.stop_loss_pnl) {
-            should_exit = true;
-            exit_reason = fmt::format("Stop loss: {:.1f}%", current_pnl_pct * 100.0);
-        } else if (peak_pnl_pct >= cfg.trailing_stop_activation && drawdown_from_peak >= cfg.trailing_stop_distance) {
-            should_exit = true;
-            exit_reason = fmt::format("Trailing stop: peak {:.3f} -> {:.3f} (-{:.1f}%)", p.peak_price, current_price, drawdown_from_peak * 100.0);
-        } else if (current_price >= cfg.near_win_price) {
-            should_exit = true;
-            exit_reason = fmt::format("Near resolution win: {:.3f}", current_price);
-        } else if (current_price <= cfg.near_loss_price && current_price > 0) {
-            should_exit = true;
-            exit_reason = fmt::format("Near resolution loss: {:.3f}", current_price);
-        } else if ((current_price >= cfg.take_profit_price && current_pnl_pct > 0) || current_pnl_pct >= cfg.take_profit_pnl) {
-            should_exit = true;
-            exit_reason = fmt::format("Take profit: {:.1f}%", current_pnl_pct * 100.0);
-        } else if (age >= cfg.position_timeout_seconds) {
-            should_exit = true;
-            exit_reason = fmt::format("Timeout: {:.0f}s", age);
-        }
-
-        if (should_exit && current_price > 0) {
-            if (now >= p.end_date_ts) {
-                // Resolution at expiry (Polymarket settle)
-                double exit_price = (current_price >= 0.5) ? 1.0 : 0.0;
-                risk_manager.register_trade_close(id, exit_price);
-                store.push_telemetry(fmt::format("SETTLED {} {} @ {:.2f} | {}", p.asset, exit_price >= 1.0 ? "WIN" : "LOSS", exit_price, p.market_question));
-            } else {
-                // Dynamic Early Exit — only submit SELL if order value meets minimum size
-                double close_proceeds = current_price * p.size_shares;
-                double min_order = risk_manager.get_min_order_size();
-                if (close_proceeds < min_order) {
-                    // Value too small for the exchange to accept — let it ride to expiry
-                    store.push_telemetry(fmt::format("LA SKIP CLOSE {} | {} | ${:.2f} < min ${:.2f}",
-                        p.asset, exit_reason, close_proceeds, min_order));
-                } else {
-                    router.submit_close_order(id, p.token_id, current_price, p.size_shares, p.asset, p.market_question, p.end_date_ts, "LA", p.is_neg_risk);
-                    store.push_telemetry(fmt::format("LA EARLY EXIT {} | {} | PnL: {:.1f}%", p.asset, exit_reason, current_pnl_pct * 100.0));
-                }
-            }
-        }
+static void attempt_onchain_redeem_async(
+    const std::string& condition_id,
+    const std::string& dh_id,
+    StateStore& store,
+    risk::RiskManager& risk_manager
+) {
+    if (condition_id.empty() || condition_id.size() < 10) {
+        spdlog::warn("Redeem skipped for {} — missing condition_id", dh_id);
+        return;
     }
 
-    // 2. Process Dump Hedge (DH) positions - only on expiry
+    {
+        std::lock_guard<std::mutex> lock(g_redeem_mutex);
+        if (g_redeem_triggered.count(condition_id)) return;
+        g_redeem_triggered.insert(condition_id);
+    }
+
+    std::thread([condition_id, dh_id, &store, &risk_manager]() {
+        spdlog::info("AUTO-REDEEM starting | {} | condition {}", dh_id, condition_id.substr(0, 18));
+        store.push_telemetry(fmt::format("REDEEM START {} | {}", dh_id, condition_id.substr(0, 18)));
+
+#ifdef _WIN32
+        std::string cmd = "python redeem_positions.py \"" + condition_id + "\"";
+#else
+        std::string cmd = "python3 redeem_positions.py \"" + condition_id + "\" 2>/dev/null";
+#endif
+        FILE* pipe = popen(cmd.c_str(), "r");
+        if (!pipe) {
+            spdlog::error("AUTO-REDEEM popen failed for {}", dh_id);
+            return;
+        }
+
+        std::string output;
+        char buf[512];
+        while (fgets(buf, sizeof(buf), pipe)) {
+            output += buf;
+        }
+        pclose(pipe);
+
+        try {
+            auto jv = boost::json::parse(output);
+            auto obj = jv.as_object();
+            bool ok = obj.contains("success") && obj.at("success").as_bool();
+            std::string msg = obj.contains("message") ? std::string(obj.at("message").as_string()) : "";
+            std::string tx = obj.contains("tx_hash") && obj.at("tx_hash").is_string()
+                ? std::string(obj.at("tx_hash").as_string()) : "";
+
+            if (ok) {
+                spdlog::info("AUTO-REDEEM OK | {} | tx {}", dh_id, tx.empty() ? "n/a" : tx.substr(0, 20));
+                store.push_telemetry(fmt::format("REDEEM OK {} | tx {}", dh_id, tx.empty() ? "n/a" : tx.substr(0, 18)));
+                sync_live_balance(risk_manager);
+            } else {
+                spdlog::critical("AUTO-REDEEM FAILED | {} | {}", dh_id, msg);
+                store.push_telemetry(fmt::format("REDEEM FAIL {} | {}", dh_id, msg));
+            }
+        } catch (const std::exception& e) {
+            spdlog::error("AUTO-REDEEM parse error | {} | raw: {}", dh_id, output.substr(0, 200));
+        }
+    }).detach();
+}
+
+void check_and_close_dh_positions(
+    risk::RiskManager& risk_manager,
+    StateStore& store,
+    bool auto_redeem_enabled
+) {
+    auto now = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+
     auto open_dh = risk_manager.get_open_dh_positions();
     for (const auto& [id, p] : open_dh) {
-        if (now >= p.end_date_ts) {
-            auto live_y = store.get_token_price(p.yes_token_id);
-            auto live_n = store.get_token_price(p.no_token_id);
-            double ey = live_y ? ((live_y->price >= 0.5) ? 1.0 : 0.0) : 0.5;
-            double en = live_n ? ((live_n->price >= 0.5) ? 1.0 : 0.0) : 0.5;
+        if (now < p.end_date_ts) continue;
+
+        std::string condition_id = p.condition_id;
+        bool is_live = !p.paper_mode;
+
+        auto live_y = store.get_token_price(p.yes_token_id);
+        auto live_n = store.get_token_price(p.no_token_id);
+
+        bool use_structural = false;
+        double ey = 0.0;
+        double en = 0.0;
+
+        if (!live_y || !live_n) {
+            use_structural = true;
+        } else {
+            ey = (live_y->price >= 0.5) ? 1.0 : 0.0;
+            en = (live_n->price >= 0.5) ? 1.0 : 0.0;
+            if (ey + en != 1.0) {
+                use_structural = true;
+            }
+        }
+
+        if (use_structural) {
+            double proceeds = p.combined_cost_usdc + p.locked_profit_usdc;
+            risk_manager.register_dh_close(
+                id,
+                p.yes_entry_price,
+                p.no_entry_price,
+                "Market resolved (structural)",
+                std::nullopt,
+                proceeds);
+            store.push_telemetry(fmt::format(
+                "SETTLED {} DH RESOLVED | PnL ${:+.2f} (locked) | {}",
+                p.asset, p.locked_profit_usdc, p.market_question));
+            spdlog::info(
+                "DH expiry structural settle | {} | proceeds ${:.2f} | locked ${:.2f}",
+                id, proceeds, p.locked_profit_usdc);
+        } else {
             risk_manager.register_dh_close(id, ey, en, "EXPIRED");
-            std::string dh_outcome = (ey >= 1.0 || en >= 1.0) ? "WIN" : "LOSS";
-            store.push_telemetry(fmt::format("SETTLED {} {} @ {:.2f} | {}",
-                p.asset, dh_outcome, std::max(ey, en), p.market_question));
+            store.push_telemetry(fmt::format(
+                "SETTLED {} DH @ YES={:.0f} NO={:.0f} | {}",
+                p.asset, ey, en, p.market_question));
+        }
+
+        if (is_live && auto_redeem_enabled && !condition_id.empty()) {
+            attempt_onchain_redeem_async(condition_id, id, store, risk_manager);
+        } else if (is_live && condition_id.empty()) {
+            spdlog::warn("Live DH {} closed without condition_id — cannot auto-redeem", id);
         }
     }
 }
@@ -315,28 +373,35 @@ int main() {
                 starting_balance = fetch_usdc_balance(polymarket_funder);
             }
             if (starting_balance <= 0) {
-                spdlog::warn("Polymarket balance is $0.00. Deposit USDC to start trading.");
+                spdlog::warn("Polymarket balance is $0.00. Deposit pUSD/USDC to the proxy wallet to trade.");
             }
         }
 
-        std::string polymarket_pk = env.count("POLYMARKET_PRIVATE_KEY") ? env["POLYMARKET_PRIVATE_KEY"] : "0x0000000000000000000000000000000000000000000000000000000000000001";
+        std::string polymarket_pk = env.count("POLYMARKET_PRIVATE_KEY") ? env["POLYMARKET_PRIVATE_KEY"] : "";
+        if (!paper_mode) {
+            if (polymarket_pk.empty() ||
+                polymarket_pk == "0x0000000000000000000000000000000000000000000000000000000000000001" ||
+                polymarket_pk == "0xYourWalletPrivateKey") {
+                spdlog::critical("[FATAL] Live mode requires a valid POLYMARKET_PRIVATE_KEY in .env");
+                return 1;
+            }
+            if (polymarket_funder.empty() || polymarket_funder == "0xYourPolygonWalletAddress") {
+                spdlog::critical("[FATAL] Live mode requires POLYMARKET_FUNDER in .env");
+                return 1;
+            }
+        } else if (polymarket_pk.empty()) {
+            polymarket_pk = "0x0000000000000000000000000000000000000000000000000000000000000001";
+        }
         // V2 Exchange addresses (April 2026 migration)
         const std::string V2_EXCHANGE = "0xE111180000d2663C0091e4f400237545B87B996B";
         const std::string V2_NEG_RISK = "0xe2222d279d744050d28e00520010520000310F59";
         
         std::string verifying_contract = V2_EXCHANGE;
 
-        ExitConfig exit_cfg;
-        if (env.count("NEAR_WIN_PRICE")) exit_cfg.near_win_price = std::stod(env["NEAR_WIN_PRICE"]);
-        if (env.count("NEAR_LOSS_PRICE")) exit_cfg.near_loss_price = std::stod(env["NEAR_LOSS_PRICE"]);
-        if (env.count("TAKE_PROFIT_PRICE")) exit_cfg.take_profit_price = std::stod(env["TAKE_PROFIT_PRICE"]);
-        if (env.count("TAKE_PROFIT_PNL")) exit_cfg.take_profit_pnl = std::stod(env["TAKE_PROFIT_PNL"]);
-        if (env.count("STOP_LOSS_PNL")) exit_cfg.stop_loss_pnl = std::stod(env["STOP_LOSS_PNL"]);
-        if (env.count("POSITION_TIMEOUT_SECONDS")) exit_cfg.position_timeout_seconds = std::stod(env["POSITION_TIMEOUT_SECONDS"]);
-        if (env.count("TRAILING_STOP_ACTIVATION")) exit_cfg.trailing_stop_activation = std::stod(env["TRAILING_STOP_ACTIVATION"]);
-        if (env.count("TRAILING_STOP_DISTANCE")) exit_cfg.trailing_stop_distance = std::stod(env["TRAILING_STOP_DISTANCE"]);
+        bool auto_redeem = !paper_mode && env_flag_true(env, "AUTO_REDEEM", true);
 
-        spdlog::info("Starting Core v2.2 | Mode: {} | Bal: ${:.2f}", paper_mode ? "PAPER" : "LIVE", starting_balance);
+        spdlog::info("Starting Core v3.0 (DH-only) | Mode: {} | Bal: ${:.2f} | Auto-redeem: {}",
+                     paper_mode ? "PAPER" : "LIVE", starting_balance, auto_redeem ? "on" : "off");
 
         boost::asio::io_context feed_ioc;
         boost::asio::ssl::context feed_ctx{boost::asio::ssl::context::sslv23_client};
@@ -352,25 +417,12 @@ int main() {
         int max_concurrent = env.count("RISK_MAX_CONCURRENT_POSITIONS") ? std::stoi(env["RISK_MAX_CONCURRENT_POSITIONS"]) : 3;
         double min_order = env.count("MIN_ORDER_SIZE") ? std::stod(env["MIN_ORDER_SIZE"]) : 5.0;
         double fee_rate = env.count("FEE_RATE") ? std::stod(env["FEE_RATE"]) : 0.018;
-        double entry_price_min = env.count("ENTRY_PRICE_MIN") ? std::stod(env["ENTRY_PRICE_MIN"]) : 0.38;
-        double entry_price_max = env.count("ENTRY_PRICE_MAX") ? std::stod(env["ENTRY_PRICE_MAX"]) : 0.62;
-        double la_min_edge = env.count("EDGE_MIN_EDGE_THRESHOLD") ? std::stod(env["EDGE_MIN_EDGE_THRESHOLD"]) : 0.04;
-        double la_cooldown = env.count("EDGE_COOLDOWN_SECONDS") ? std::stod(env["EDGE_COOLDOWN_SECONDS"]) : 5.0;
-        double la_min_secs = env.count("EDGE_MIN_SECONDS_REMAINING") ? std::stod(env["EDGE_MIN_SECONDS_REMAINING"]) : 60.0;
-        double la_fair_strength = env.count("EDGE_MIN_FAIR_VALUE_STRENGTH") ? std::stod(env["EDGE_MIN_FAIR_VALUE_STRENGTH"]) : 0.05;
         double dh_sum_target = env.count("DH_SUM_TARGET") ? std::stod(env["DH_SUM_TARGET"]) : 0.95;
         double dh_min_discount = env.count("DH_MIN_DISCOUNT") ? std::stod(env["DH_MIN_DISCOUNT"]) : 0.03;
         double dh_cooldown = env.count("DH_COOLDOWN_SECONDS") ? std::stod(env["DH_COOLDOWN_SECONDS"]) : 30.0;
         double dh_min_secs = env.count("DH_MIN_SECONDS_REMAINING") ? std::stod(env["DH_MIN_SECONDS_REMAINING"]) : 60.0;
 
-        std::string strategy = env.count("STRATEGY") ? env["STRATEGY"] : "dump_hedge";
-        std::transform(strategy.begin(), strategy.end(), strategy.begin(), ::tolower);
-        const bool use_la = (strategy == "latency_arb" || strategy == "both");
-        const bool use_dh = (strategy == "dump_hedge" || strategy == "both");
-        if (!use_la && !use_dh) {
-            spdlog::critical("STRATEGY must be latency_arb, dump_hedge, or both. Got: {}", strategy);
-            return 1;
-        }
+        const std::string strategy = "dump_hedge";
 
         bool binance_feed_enabled = true;
         if (env.count("BINANCE_FEED_ENABLED")) {
@@ -378,13 +430,9 @@ int main() {
             std::transform(bf.begin(), bf.end(), bf.begin(), ::tolower);
             binance_feed_enabled = !(bf == "false" || bf == "0" || bf == "no" || bf == "off");
         }
-        const bool use_binance = use_la || binance_feed_enabled;
 
-        spdlog::info("Strategy mode: {} | LA: {} | DH: {} | Binance feed: {}",
-                     strategy, use_la ? "on" : "off", use_dh ? "on" : "off",
-                     use_binance ? (use_la ? "on (LA)" : "on (display)") : "off");
-        spdlog::info("Strategy | DH sum<={:.2f} disc>={:.2f} | LA edge>={:.2f} cd={:.0f}s | Entry {:.2f}-{:.2f}",
-                     dh_sum_target, dh_min_discount, la_min_edge, la_cooldown, entry_price_min, entry_price_max);
+        spdlog::info("Strategy: DH only | DH sum<={:.2f} disc>={:.2f} | Binance chart: {}",
+                     dh_sum_target, dh_min_discount, binance_feed_enabled ? "on" : "off");
 
         std::string poly_api_key = env.count("POLY_API_KEY") ? env["POLY_API_KEY"] : "";
         std::string poly_api_secret = env.count("POLY_API_SECRET") ? env["POLY_API_SECRET"] : "";
@@ -424,13 +472,17 @@ int main() {
                 spdlog::info("Paper state: fresh session (no snapshot at {})", paper_state_path);
             }
         }
+        int legacy_la = risk_manager.close_legacy_la_positions();
+        if (legacy_la > 0) {
+            spdlog::warn("Closed {} legacy LA open position(s) — LA strategy removed", legacy_la);
+            store.push_telemetry(fmt::format("LEGACY LA CLOSED | {} position(s)", legacy_la));
+        }
 
         store.set_risk_manager(&risk_manager);
         store.set_fee_rate(fee_rate);
         store.set_strategy(strategy);
         store.set_dh_config(dh_sum_target, dh_min_discount);
-        store.set_binance_feed_enabled(use_binance);
-        KellySizer kelly_sizer(0.5, 0.08);
+        store.set_binance_feed_enabled(binance_feed_enabled);
 
         exec::OrderRouter router(feed_ioc, feed_ctx, store, risk_manager, polymarket_host, polymarket_chain_id, verifying_contract, polymarket_pk, polymarket_signer, polymarket_funder, paper_mode, poly_api_key, poly_api_secret, poly_api_passphrase, neg_risk_exchange);
 
@@ -438,86 +490,44 @@ int main() {
         std::shared_ptr<BinanceFeed> btc_feed;
         std::shared_ptr<BinanceFeed> eth_feed;
         std::shared_ptr<BinanceFeed> sol_feed;
-        if (use_binance) {
+        if (binance_feed_enabled) {
             btc_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "btcusdt");
             eth_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "ethusdt");
             sol_feed = std::make_shared<BinanceFeed>(feed_ioc, feed_ctx, store, "solusdt");
         }
 
-        // Feeds will be started after callbacks are registered
-
         auto feed_work = boost::asio::make_work_guard(feed_ioc);
         std::thread feed_thread([&feed_ioc]() { feed_ioc.run(); });
 
         std::mutex detector_mutex;
-
-        std::vector<std::unique_ptr<LatencyArbDetector>> la_detectors;
-        auto price_resolver = [&gamma](const std::string& token_id, const std::string& side) { return gamma.fetch_token_price(token_id, side); };
-        if (use_la) {
-            la_detectors.push_back(std::make_unique<LatencyArbDetector>(store, std::vector<MarketInfo>{}, la_min_edge, la_min_secs, la_cooldown, 2.7, "btc", price_resolver));
-            la_detectors.push_back(std::make_unique<LatencyArbDetector>(store, std::vector<MarketInfo>{}, la_min_edge, la_min_secs, la_cooldown, 2.7, "eth", price_resolver));
-            la_detectors.push_back(std::make_unique<LatencyArbDetector>(store, std::vector<MarketInfo>{}, la_min_edge, la_min_secs, la_cooldown, 2.7, "sol", price_resolver));
-        }
-
         std::unique_ptr<DumpHedgeDetector> dh_detector;
-        auto eval_la_for_asset = [&](const std::string& sym) {
-            if (!use_la) return;
-            std::string asset = "btc";
-            if (sym.find("eth") != std::string::npos) asset = "eth";
-            else if (sym.find("sol") != std::string::npos) asset = "sol";
-
-            std::lock_guard<std::mutex> lock(detector_mutex);
-            double now_ms = std::chrono::duration<double, std::milli>(std::chrono::system_clock::now().time_since_epoch()).count();
-            for (auto& det : la_detectors) {
-                if (det->asset() != asset) continue;
-                auto signal = det->evaluate(now_ms);
-                if (signal) {
-                    auto kelly = kelly_sizer.calculate(risk_manager.get_current_balance(), signal->fair_value, signal->polymarket_price);
-                    if (kelly && risk_manager.can_open_position(kelly->position_size_usdc).first) {
-                        router.submit_latency_arb_order(*signal, kelly->position_size_usdc / signal->polymarket_price);
-                        std::string la_dir = (signal->token_id == signal->market.yes_token_id) ? "YES" : "NO";
-                        store.push_signal(fmt::format("LA SIGNAL {} {} | Edge:{:.3f} Fair:{:.3f} PM:{:.4f}",
-                            signal->asset, la_dir, signal->edge, signal->fair_value, signal->polymarket_price));
-                        store.push_telemetry(fmt::format("[LA] PLACED {} {} @ {:.4f} | ${:.2f}",
-                            signal->asset, la_dir, signal->polymarket_price, kelly->position_size_usdc));
-                    }
-                }
-            }
-        };
 
         auto poly_feed = std::make_shared<PolymarketFeed>(feed_ioc, feed_ctx, store);
 
-        if (use_la) {
-            btc_feed->set_tick_callback([&](const std::string& sym, double) { eval_la_for_asset(sym); });
-            eth_feed->set_tick_callback([&](const std::string& sym, double) { eval_la_for_asset(sym); });
-            sol_feed->set_tick_callback([&](const std::string& sym, double) { eval_la_for_asset(sym); });
-        }
-
-        poly_feed->set_tick_callback([&](const std::string& token_id) {
-            if (!use_dh) return;
+        poly_feed->set_tick_callback([&](const std::string& /*token_id*/) {
             std::lock_guard<std::mutex> lock(detector_mutex);
             double now_ms = std::chrono::duration<double, std::milli>(std::chrono::system_clock::now().time_since_epoch()).count();
-            if (dh_detector) {
-                auto signal = dh_detector->evaluate(now_ms);
-                if (signal) {
-                    double max_allowed_usdc = risk_manager.get_current_balance() * 0.08;
-                    double size_shares = max_allowed_usdc / signal->combined_price;
-                    if (risk_manager.can_open_dh_position(signal->combined_price * size_shares).first) {
-                        router.submit_dump_hedge_order(*signal, size_shares);
-                        store.push_signal(fmt::format("DH SIGNAL {} | YES:{:.4f} NO:{:.4f} SUM:{:.4f} DISC:{:.1f}%",
-                            signal->asset, signal->yes_price, signal->no_price,
-                            signal->combined_price, signal->discount * 100.0));
-                        store.push_telemetry(fmt::format("[DH] PLACED {} @ {:.4f} | {:.2f} shares | ${:.2f}",
-                            signal->asset, signal->yes_price, size_shares, signal->yes_price * size_shares));
-                        store.push_telemetry(fmt::format("[DH] PLACED {} @ {:.4f} | {:.2f} shares | ${:.2f}",
-                            signal->asset, signal->no_price, size_shares, signal->no_price * size_shares));
-                    }
-                }
+            if (!dh_detector) return;
+            auto signal = dh_detector->evaluate(now_ms);
+            if (!signal) return;
+
+            for (const auto& [id, p] : risk_manager.get_open_dh_positions()) {
+                if (p.asset == signal->asset) return;
             }
+
+            double max_allowed_usdc = risk_manager.get_current_balance() * max_pos;
+            double size_shares = max_allowed_usdc / signal->combined_price;
+            if (!risk_manager.can_open_dh_position(signal->combined_price * size_shares).first) return;
+
+            store.push_signal(fmt::format("DH SIGNAL {} | YES:{:.4f} NO:{:.4f} SUM:{:.4f} DISC:{:.1f}%",
+                signal->asset, signal->yes_price, signal->no_price,
+                signal->combined_price, signal->discount * 100.0));
+
+            if (!router.submit_dump_hedge_order(*signal, size_shares)) return;
         });
 
         // Start feeds only after all callbacks are ready
-        if (use_binance) {
+        if (binance_feed_enabled) {
             btc_feed->start();
             eth_feed->start();
             sol_feed->start();
@@ -528,9 +538,6 @@ int main() {
         auto refresh_markets = [&]() {
             if (is_refreshing.exchange(true)) return;
             try {
-                // NOTE: Do NOT call gamma_ioc.restart() here. The price_resolver_ lambda
-                // (called from Binance feed threads) uses gamma_ioc for synchronous HTTP.
-                // restart() while those ops are in flight is undefined behaviour.
                 std::vector<MarketInfo> all_m;
                 auto b5 = gamma.fetch_updown_markets("btc", 5);
                 auto e5 = gamma.fetch_updown_markets("eth", 5);
@@ -543,27 +550,11 @@ int main() {
                 all_m.insert(all_m.end(), b15.begin(), b15.end());
                 all_m.insert(all_m.end(), e15.begin(), e15.end());
 
-                std::vector<MarketInfo> la_m;
-                for (const auto& m : all_m) {
-                    if (m.window_minutes == 5) la_m.push_back(m);
-                }
-
                 store.update_markets(all_m);
                 {
                     std::lock_guard<std::mutex> lock(detector_mutex);
-                    if (use_la) {
-                        for (auto& det : la_detectors) {
-                            det->set_active_markets(la_m);
-                            det->set_entry_price_range(entry_price_min, entry_price_max);
-                            det->set_min_fair_value_strength(la_fair_strength);
-                            det->set_fee_rate(fee_rate);
-                        }
-                    }
-                    if (use_dh) {
-                        // DH trades 5m (btc/eth/sol) + 15m (btc/eth) — all discovered markets
-                        dh_detector = std::make_unique<DumpHedgeDetector>(store, all_m, dh_sum_target, dh_min_discount, dh_min_secs, dh_cooldown);
-                        dh_detector->set_fee_rate(fee_rate);
-                    }
+                    dh_detector = std::make_unique<DumpHedgeDetector>(store, all_m, dh_sum_target, dh_min_discount, dh_min_secs, dh_cooldown);
+                    dh_detector->set_fee_rate(fee_rate);
                 }
                 std::vector<std::string> tokens;
                 for (const auto& m : all_m) { tokens.push_back(m.yes_token_id); tokens.push_back(m.no_token_id); }
@@ -608,11 +599,11 @@ int main() {
         balance_thread.detach();
 
         auto poll_binance_rest = [&]() {
-            struct SymMap { const char* sym; const char* asset; void (StateStore::*upd)(const PriceTick&); };
+            struct SymMap { const char* sym; void (StateStore::*upd)(const PriceTick&); };
             SymMap maps[] = {
-                {"BTCUSDT", "btcusdt", &StateStore::update_btc_price},
-                {"ETHUSDT", "ethusdt", &StateStore::update_eth_price},
-                {"SOLUSDT", "solusdt", &StateStore::update_sol_price},
+                {"BTCUSDT", &StateStore::update_btc_price},
+                {"ETHUSDT", &StateStore::update_eth_price},
+                {"SOLUSDT", &StateStore::update_sol_price},
             };
             for (const auto& m : maps) {
                 auto px = gamma.fetch_binance_price(m.sym);
@@ -625,7 +616,6 @@ int main() {
                     std::chrono::system_clock::now().time_since_epoch()).count();
                 tick.volume = 0;
                 (store.*(m.upd))(tick);
-                eval_la_for_asset(m.asset);
             }
         };
 
@@ -640,7 +630,7 @@ int main() {
                 std::thread([&refresh_markets]() { refresh_markets(); }).detach();
             }
             // REST fallback when Binance WS is blocked (common in Docker/region)
-            if (use_binance && loop_start - last_binance_rest > std::chrono::seconds(2)) {
+            if (binance_feed_enabled && loop_start - last_binance_rest > std::chrono::seconds(2)) {
                 last_binance_rest = loop_start;
                 auto btc = store.get_latest_btc_price();
                 if (!btc || btc->price <= 0) {
@@ -652,7 +642,7 @@ int main() {
                 }
             }
             risk_manager.is_trading_allowed(); // Trigger resume checks even if no signals fire
-            check_and_close_positions(risk_manager, store, router, exit_cfg);
+            check_and_close_dh_positions(risk_manager, store, auto_redeem);
             if (paper_mode && paper_state_persist && loop_start - last_paper_save > std::chrono::seconds(10)) {
                 last_paper_save = loop_start;
                 persistence::save_paper_state(risk_manager, paper_state_path);

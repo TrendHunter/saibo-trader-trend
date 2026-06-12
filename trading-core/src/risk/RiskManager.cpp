@@ -128,9 +128,11 @@ int RiskManager::get_open_position_count() const {
 
 double RiskManager::get_win_rate() const {
     std::lock_guard<std::recursive_mutex> lock(mtx_);
-    int closed = closed_positions_.size() + closed_dh_positions_.size();
+    // Use persisted trade counters — closed_* arrays may be truncated on paper-state export.
+    int closed = total_trades_ + total_dh_trades_;
     if (closed == 0) return 0.0;
-    return static_cast<double>(winning_trades_) / closed;
+    double rate = static_cast<double>(winning_trades_) / closed;
+    return std::min(rate, 1.0);
 }
 
 double RiskManager::get_min_order_size() const {
@@ -568,10 +570,6 @@ void RiskManager::check_circuit_breaker() {
         return std::nullopt;
     };
 
-    if (auto msg = evaluate_cb(recent_la_pnls_, "LA")) {
-        spdlog::warn("{}", *msg);
-        return;
-    }
     if (auto msg = evaluate_cb(recent_dh_pnls_, "DH")) {
         spdlog::warn("{}", *msg);
         return;
@@ -588,6 +586,27 @@ void RiskManager::check_circuit_breaker_resume() {
         recent_dh_pnls_.clear();
         spdlog::info("Circuit breaker pause expired - trading RESUMED.");
     }
+}
+
+int RiskManager::close_legacy_la_positions() {
+    struct LegacyClose { std::string id; double exit_price; double proceeds; };
+    std::vector<LegacyClose> to_close;
+    {
+        std::lock_guard<std::recursive_mutex> lock(mtx_);
+        for (const auto& [id, p] : open_positions_) {
+            if (p.strategy == "LA") {
+                to_close.push_back({id, p.entry_price, p.cost_usdc * (1.0 + fee_rate_)});
+            }
+        }
+    }
+    int closed = 0;
+    for (const auto& lc : to_close) {
+        if (register_trade_close(lc.id, lc.exit_price, std::nullopt, lc.proceeds).has_value()) {
+            ++closed;
+            spdlog::info("Legacy LA position closed | {} | proceeds ${:.2f}", lc.id, lc.proceeds);
+        }
+    }
+    return closed;
 }
 
 void RiskManager::trigger_kill_switch(const std::string& reason) {
@@ -706,6 +725,7 @@ boost::json::object dh_position_to_json(const DumpHedgePosition& p) {
     o["strategy"] = p.strategy;
     o["is_neg_risk"] = p.is_neg_risk;
     o["window_minutes"] = p.window_minutes;
+    if (!p.condition_id.empty()) o["condition_id"] = p.condition_id;
     o["exit_reason"] = p.exit_reason;
     if (p.closed_at) o["closed_at"] = *p.closed_at;
     if (p.yes_exit_price) o["yes_exit_price"] = *p.yes_exit_price;
@@ -735,6 +755,7 @@ bool dh_position_from_json(const boost::json::object& o, DumpHedgePosition& p) {
         p.strategy = o.contains("strategy") ? std::string(o.at("strategy").as_string()) : "DH";
         p.is_neg_risk = o.contains("is_neg_risk") && o.at("is_neg_risk").as_bool();
         p.window_minutes = o.contains("window_minutes") ? static_cast<int>(o.at("window_minutes").as_int64()) : 5;
+        p.condition_id = o.contains("condition_id") ? std::string(o.at("condition_id").as_string()) : "";
         p.exit_reason = o.contains("exit_reason") ? std::string(o.at("exit_reason").as_string()) : "";
         p.closed_at = std::nullopt;
         p.yes_exit_price = std::nullopt;

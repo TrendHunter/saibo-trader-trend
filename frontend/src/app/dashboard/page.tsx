@@ -22,7 +22,7 @@ export default function DashboardPage() {
 
   const pnlColor = liveState.totalPnl >= 0 ? "text-emerald-400" : "text-red-400";
   const coreStatus = coreStatusLabel(liveState.status);
-  const showPm = liveState.strategy === "dump_hedge" || liveState.strategy === "both";
+  const showPm = true;
   const showBinance = liveState.binanceFeedEnabled;
 
   return (
@@ -67,7 +67,7 @@ export default function DashboardPage() {
                 {liveState.openPositions}
               </div>
               <p className="text-xs text-white/40 mt-3">
-                累计成交 {liveState.totalTrades + liveState.totalDhTrades} 笔
+                累计成交 {liveState.totalDhTrades} 笔
               </p>
             </CardContent>
           </GlassCard>
@@ -79,7 +79,7 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent className="pb-4">
               <div className="text-2xl font-mono font-extrabold tracking-tighter text-white">
-                {(liveState.winRate * 100).toFixed(1)}%
+                {(Math.min(liveState.winRate, 1) * 100).toFixed(1)}%
               </div>
               <p className="text-xs text-white/40 mt-3">历史平仓胜率</p>
             </CardContent>

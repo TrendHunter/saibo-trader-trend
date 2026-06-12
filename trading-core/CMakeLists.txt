@@ -38,12 +38,9 @@ set(SOURCES
     src/feeds/BinanceFeed.cpp
     src/feeds/PolymarketFeed.cpp
     src/feeds/GammaClient.cpp
-    src/model/FairValueModel.cpp
     src/risk/RiskManager.cpp
     src/exec/EIP712Signer.cpp
     src/exec/OrderRouter.cpp
-    src/risk/KellySizer.cpp
-    src/signals/LatencyArbDetector.cpp
     src/signals/DumpHedgeDetector.cpp
 )
 
@@ -66,36 +63,3 @@ target_link_libraries(trading-core PRIVATE
     spdlog::spdlog
     secp256k1
 )
-
-# Test Executable for Phase 3
-add_executable(test_phase3
-    src/test_phase3.cpp
-    src/model/FairValueModel.cpp
-    src/risk/RiskManager.cpp
-)
-target_link_libraries(test_phase3 PRIVATE spdlog::spdlog)
-target_compile_definitions(test_phase3 PRIVATE SPDLOG_NO_EXCEPTIONS)
-
-# Test Executable for Phase 4
-add_executable(test_phase4
-    src/test_phase4.cpp
-    src/state/StateStore.cpp
-    src/model/FairValueModel.cpp
-    src/risk/RiskManager.cpp
-    src/risk/KellySizer.cpp
-    src/signals/LatencyArbDetector.cpp
-    src/signals/DumpHedgeDetector.cpp
-    src/exec/OrderRouter.cpp
-    src/exec/EIP712Signer.cpp
-)
-target_link_libraries(test_phase4 PRIVATE 
-    spdlog::spdlog 
-    fmt::fmt 
-    Boost::headers 
-    Boost::system
-    Boost::json
-    OpenSSL::SSL
-    OpenSSL::Crypto
-    secp256k1
-)
-target_compile_definitions(test_phase4 PRIVATE SPDLOG_NO_EXCEPTIONS)

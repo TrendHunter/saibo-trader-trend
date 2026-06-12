@@ -16,7 +16,7 @@ export interface DHOpportunity {
 
 export interface TradeRecord {
   id: string;
-  strategy: "LA" | "DH";
+  strategy: "LA" | "DH"; // LA = legacy history only
   asset: string;
   status: "open" | "closed";
   market: string;
@@ -139,7 +139,8 @@ function toNumber(value: unknown, fallback = 0): number {
 
 function normalizeWinRate(value: unknown): number {
   const n = toNumber(value, 0);
-  return n > 1 ? n / 100 : n;
+  const ratio = n > 1 ? n / 100 : n;
+  return Math.min(Math.max(ratio, 0), 1);
 }
 
 function normalizeOpportunities(value: unknown): DHOpportunity[] {
@@ -248,7 +249,8 @@ function normalizeTradeHistory(value: unknown): TradeRecord[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => {
     const t = item as Record<string, unknown>;
-    const strategy = String(t.strategy ?? "LA") as "LA" | "DH";
+    const strategyRaw = String(t.strategy ?? "DH");
+    const strategy = (strategyRaw === "LA" ? "LA" : "DH") as "LA" | "DH";
     const market = String(t.market ?? "");
     const windowMinutes = inferWindowMinutes(market, toNumber(t.windowMinutes) || undefined);
     return {

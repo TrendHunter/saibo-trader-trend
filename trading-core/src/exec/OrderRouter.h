@@ -6,7 +6,8 @@
 #include "../signals/Signal.h"
 #include <string>
 #include <memory>
-#include <thread>
+#include <mutex>
+#include <optional>
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
 #include <openssl/hmac.h>
@@ -17,6 +18,12 @@
 
 namespace trading {
 namespace exec {
+
+struct LegFillResult {
+    bool success = false;
+    double price = 0.0;
+    double size_shares = 0.0;
+};
 
 class OrderRouter {
 public:
@@ -44,10 +51,11 @@ public:
                       uint8_t side,
                       bool is_neg_risk = false);
 
-    bool check_book_depth(const std::string& token_id, double price, double size);
+    bool check_book_depth(const std::string& token_id, double price, double size_shares);
 
-    void submit_latency_arb_order(const LatencyArbSignal& signal, double size);
-    void submit_dump_hedge_order(const DumpHedgeSignal& signal, double size);
+    // Returns true if a DH position was opened (paper or live).
+    bool submit_dump_hedge_order(const DumpHedgeSignal& signal, double size_shares);
+
     void submit_close_order(const std::string& order_id, const std::string& token_id, double current_price, double size, const std::string& asset, const std::string& question, double end_date_ts, const std::string& strategy, bool is_neg_risk = false);
 
 private:
@@ -55,6 +63,7 @@ private:
     boost::asio::ssl::context& ctx_;
     trading::StateStore& store_;
     risk::RiskManager& risk_manager_;
+    mutable std::mutex http_mutex_;
 
     std::string clob_api_url_;
     std::string signer_address_;
@@ -68,12 +77,26 @@ private:
     std::unique_ptr<EIP712Signer> signer_;
     std::unique_ptr<EIP712Signer> signer_neg_risk_;
 
-    bool execute_rest_order(const Order& order, const Signature& sig, const std::string& asset = "", const std::string& question = "", double end_date_ts = 0.0, const std::string& strategy = "LA", const std::string& original_order_id = "", bool is_neg_risk = false);
-    bool simulate_paper_order(const Order& order, const Signature& sig, const std::string& asset = "", const std::string& question = "", double end_date_ts = 0.0, const std::string& strategy = "LA", const std::string& original_order_id = "", bool is_neg_risk = false, const std::string& direction = "");
+    Order build_order(const std::string& token_id, double price, double size_shares, uint8_t side) const;
 
-    // Returns the correct signer for the market type.
-    // Neg-risk markets (all Polymarket Up/Down 5m/15m) require a different
-    // EIP-712 verifying contract. Using the wrong one → order_version_mismatch.
+    // When register_position=false, sends to CLOB only (used for DH legs / unwind).
+    LegFillResult execute_rest_order(
+        const Order& order,
+        const Signature& sig,
+        bool is_neg_risk,
+        bool register_position,
+        const std::string& asset = "",
+        const std::string& question = "",
+        double end_date_ts = 0.0,
+        const std::string& strategy = "MANUAL",
+        const std::string& original_order_id = ""
+    );
+
+    bool simulate_paper_order(const Order& order, const Signature& sig, const std::string& asset = "", const std::string& question = "", double end_date_ts = 0.0, const std::string& strategy = "MANUAL", const std::string& original_order_id = "", bool is_neg_risk = false, const std::string& direction = "");
+
+    LegFillResult execute_dh_leg_buy(const std::string& token_id, double price, double size_shares, bool is_neg_risk);
+    LegFillResult execute_unwind_sell(const std::string& token_id, double price, double size_shares, bool is_neg_risk);
+
     EIP712Signer& pick_signer(bool is_neg_risk) const;
 
     std::string generate_salt() const;

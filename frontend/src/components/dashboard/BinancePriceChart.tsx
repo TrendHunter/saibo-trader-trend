@@ -76,7 +76,7 @@ export function BinancePriceChart({ btcPrice, ethPrice, solPrice, timestamp }: B
             <span>SOL <span className="text-teal-400">{solPrice > 0 ? solPrice.toFixed(2) : "—"}</span></span>
           </div>
         </div>
-        <p className="text-[11px] text-white/35 mt-2">仅用于仪表盘展示，与 STRATEGY 独立；关闭 LA 时不会据此下单。</p>
+        <p className="text-[11px] text-white/35 mt-2">仅用于仪表盘展示，与 DH 开仓逻辑无关。</p>
       </CardHeader>
       <CardContent>
         <div ref={chartContainerRef} className="w-full h-[280px]" />

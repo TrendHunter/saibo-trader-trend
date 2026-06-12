@@ -31,7 +31,7 @@ struct Position {
     double end_date_ts = 0.0;
     std::string asset = "";
     std::string direction = "";
-    std::string strategy = "LA";
+    std::string strategy = "MANUAL";
     std::string condition_id = "";
     std::optional<double> closed_at;
     std::optional<double> exit_price;
@@ -66,6 +66,7 @@ struct DumpHedgePosition {
     std::string exit_reason;
     bool is_neg_risk = false; // true for Polymarket Up/Down (neg-risk) markets
     int window_minutes = 5;   // 5 or 15 — Polymarket up/down series
+    std::string condition_id; // 0x hex — for on-chain redeem after resolution
 };
 
 class RiskManager {
@@ -139,6 +140,9 @@ public:
 
     void set_fee_rate(double rate) { fee_rate_ = rate; }
     double get_fee_rate() const { return fee_rate_; }
+
+    // Flat-close any open LA positions left from older sessions (strategy removed).
+    int close_legacy_la_positions();
 
     void pause(const std::string& reason = "Manual pause");
     bool resume();

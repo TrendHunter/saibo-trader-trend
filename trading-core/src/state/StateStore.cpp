@@ -191,6 +191,7 @@ std::string StateStore::get_dashboard_json() const {
 
         boost::json::array pos_arr;
         for (const auto& [id, p] : risk_manager_->get_open_positions()) {
+            if (p.strategy == "LA") continue;
             boost::json::object po;
             po["asset"] = p.asset.c_str();
             po["side"] = p.side.c_str();
@@ -272,7 +273,7 @@ std::string StateStore::get_dashboard_json() const {
         for (const auto& p : risk_manager_->get_closed_positions()) {
             boost::json::object h;
             h["id"] = p.order_id.c_str();
-            h["strategy"] = "LA";
+            h["strategy"] = p.strategy.c_str();
             h["asset"] = p.asset.c_str();
             h["status"] = "closed";
             h["market"] = p.market_question.c_str();
@@ -323,9 +324,10 @@ std::string StateStore::get_dashboard_json() const {
         }
 
         for (const auto& [id, p] : risk_manager_->get_open_positions()) {
+            if (p.strategy == "LA") continue;
             boost::json::object h;
             h["id"] = id.c_str();
-            h["strategy"] = "LA";
+            h["strategy"] = p.strategy.c_str();
             h["asset"] = p.asset.c_str();
             h["status"] = "open";
             h["market"] = p.market_question.c_str();

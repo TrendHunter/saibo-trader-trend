@@ -37,17 +37,4 @@ struct DumpHedgeSignal {
     double timestamp;
 };
 
-struct LatencyArbSignal {
-    MarketInfo market;
-    std::string asset;
-    std::string token_id;
-    std::string side; // "BUY" or "SELL"
-    double polymarket_price;
-    double binance_price;
-    double fair_value;
-    double edge;
-    double seconds_remaining;
-    double timestamp;
-};
-
 } // namespace trading

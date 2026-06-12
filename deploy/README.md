@@ -236,8 +236,11 @@ sudo systemctl enable --now polymarket-bot@bot-a
 | | 纸面 `PAPER_MODE=true` | 实盘 `PAPER_MODE=false` |
 |--|------------------------|-------------------------|
 | 钱包 | 可不填真实私钥 | 必须填 `POLYMARKET_PRIVATE_KEY` |
-| 余额 | 内存模拟，重启清零 | 链上/SDK 真实余额 |
+| 余额 | 内存模拟，可持久化 JSON | 链上/SDK 真实余额 |
 | 多开 | 可同参数测策略 | **必须不同钱包** |
+| 到期 | 结构结算（纸面账本） | 结构结算 + 可选链上 redeem（`AUTO_REDEEM`） |
+
+**上实盘前必读：** [LIVE_READINESS.md](./LIVE_READINESS.md)
 
 ---
 

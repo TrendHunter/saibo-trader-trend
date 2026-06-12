@@ -104,7 +104,8 @@ def test_auth():
         open_orders = auth_client.get_orders()
         print(f"✅ AUTHENTICATION SUCCESSFUL!")
         print(f"Open Orders: {open_orders}")
-        print("\n🚀 YOU ARE READY TO GO LIVE!")
+        print("\n⚠️  Wallet/API auth only — does NOT validate C++ bot order execution.")
+        print("   Keep PAPER_MODE=true until live DH path is manually verified.")
     except Exception as e:
         print(f"❌ Authenticated request failed: {e}")
 

@@ -250,11 +250,10 @@ class Dashboard:
         t = Table.grid(expand=True)
         t.add_column(width=16, style="dim")
         t.add_column()
-        t.add_row("Latency Arb",   Text("RUNNING", style="bold green"))
-        t.add_row("Dump Hedge",    Text("RUNNING", style="bold green"))
-        t.add_row("LA Trades",     Text(str(la_trades), style="cyan"))
+        t.add_row("Strategy",      Text("DH only", style="bold green"))
         t.add_row("DH Trades",     Text(str(dh_trades), style="magenta"))
-        t.add_row("Sigmoid Conv",  "History-aware")
+        if la_trades:
+            t.add_row("Legacy LA", Text(str(la_trades), style="dim"))
         t.add_row("Execution",     "Event-driven C++")
         t.add_row("Heartbeat",     Text("OK", style="bold green"))
         return Panel(t, title="[bold white]ENGINE STATUS[/bold white]",
@@ -268,7 +267,6 @@ class Dashboard:
         balance   = d.get("balance",   PAPER_START)
         daily_pnl = d.get("dailyPnl",  0.0)
         total_pnl = d.get("totalPnl",  0.0)
-        la_pnl    = d.get("laPnl",     0.0)
         dh_pnl    = d.get("dhPnl",     0.0)
         open_pos  = d.get("openCount", 0)
         drawdown  = d.get("maxDrawdownPct", 0.0)
@@ -284,13 +282,11 @@ class Dashboard:
         t.add_row("Balance",   Text(f"${balance:,.2f} USDC", style="bold green"))
         t.add_row("Daily PnL", self._pnl_text(daily_pnl))
         t.add_row("Total PnL", self._pnl_text(total_pnl))
-        t.add_row("LA PnL",    Text(f"{'+' if la_pnl>=0 else ''}${la_pnl:.2f}", style="cyan"))
         t.add_row("DH PnL",    Text(f"{'+' if dh_pnl>=0 else ''}${dh_pnl:.2f}", style="magenta"))
-        la_trades = d.get("totalTrades", 0)
         dh_trades = d.get("totalDhTrades", 0)
         wr        = d.get("winRate", 0.0)
 
-        t.add_row("Win Rate",  Text(f"{wr:.1f}%  ({la_trades} LA / {dh_trades} DH)", style="white"))
+        t.add_row("Win Rate",  Text(f"{wr:.1f}%  ({dh_trades} DH)", style="white"))
         t.add_row("Open Pos",  f"{open_pos} / 3")
         t.add_row("Max Drawdown", Text(f"${abs(total_pnl - 0):.2f} ({drawdown:.2f}%)",
                                        style="red" if drawdown > 5 else "white"))
