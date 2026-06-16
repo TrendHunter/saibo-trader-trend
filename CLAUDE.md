@@ -10,7 +10,7 @@ A Polymarket arbitrage bot trading binary "Up or Down" markets (BTC/ETH/SOL/XRP,
 2. **Python glue at repo root** — `dashboard_bridge.py` (WS server), `cli_dashboard.py` (Rich terminal UI), plus helper scripts the C++ core shells out to.
 3. **`frontend/`** — Next.js 16 web dashboard (Prisma + SQLite, NextAuth, Tailwind 4).
 
-The active strategy is **Leg-In Hedge (LIH)**: buy the cheap leg first, then rebalance / hedge to target combined price (`LIH_TARGET_COMBINED`). **Dump Hedge (DH)** is archived under `archive/dh-only/` — set `LIH_ENABLED=false` to restore DH-only mode. Latency arb was removed from the code in commit 4829ceb — the README and SPECS.md still describe it, so treat those docs as partially stale.
+The active strategy is **Leg-In Hedge (LIH)**: buy the cheap leg first, then rebalance / hedge to target combined price (`LIH_TARGET_COMBINED`, default 0.95). **Dump Hedge (DH)** is archived under `archive/dh-only/` — set `LIH_ENABLED=false` to restore DH-only mode. Latency arb was removed; see root `README.md` for current architecture (not `SPECS.md`).
 
 ## Commands
 
@@ -51,7 +51,7 @@ trading-core (C++) ──stdout JSON lines──> dashboard_bridge.py ──ws:/
 ### C++ core (`trading-core/src/`)
 
 - `main.cpp` — orchestrator: parses `.env` itself (`load_env(".env")`, no library), runs the event loop, fetches USDC balance via Polygon RPC, triggers auto-redeem.
-- `signals/LegInHedgeDetector` — primary strategy (paper-only today); `signals/DumpHedgeDetector` — legacy DH (inactive when `LIH_ENABLED=true`); `feeds/` — `BinanceFeed` (spot reference, gated by `BINANCE_FEED_ENABLED`), `PolymarketFeed` (CLOB WS), `GammaClient` (market discovery); `risk/RiskManager`; `exec/EIP712Signer` + `OrderRouter` (Polygon order signing/submission); `state/StateStore` (circular price-history buffers) and `PaperStateStore` (paper ledger, persisted to `logs/paper_state.json` when `PAPER_STATE_PERSIST=true`).
+- `signals/LegInHedgeDetector` — primary LIH strategy (paper + live); `signals/DumpHedgeDetector` — legacy DH (inactive when `LIH_ENABLED=true`); `feeds/` — `BinanceFeed` (dashboard reference, `BINANCE_FEED_ENABLED`), `PolymarketFeed` (CLOB WS), `GammaClient` (market discovery); `risk/RiskManager`; `exec/OrderRouter` (paper sim + live via `clob_live.py`); `state/StateStore` and `PaperStateStore` / live state JSON persistence.
 - Adding a `.cpp` file requires listing it in `trading-core/CMakeLists.txt` `SOURCES`.
 
 ### C++ ↔ Python coupling
@@ -75,6 +75,7 @@ Everything is driven by the root `.env` (see `.env.example`): `PAPER_MODE`, `LIH
 
 ## Docs
 
-- `SPECS.md` — original technical spec (includes removed latency-arb design)
-- `deploy/README.md` — Docker single/multi-instance and bare-metal systemd deployment (Chinese)
+- `README.md` — current architecture, LIH flow, ops commands
+- `deploy/README.md` — Docker single/multi-instance and bare-metal systemd (Chinese)
+- `SPECS.md` — **deprecated** early design draft (latency arb, Redis/Postgres); do not use for implementation
 - `deploy/LIVE_READINESS.md`, `manual.md` — operations notes

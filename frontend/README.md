@@ -1,36 +1,34 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 前端仪表盘
 
-## Getting Started
+Next.js 16 仪表盘，通过 WebSocket 订阅 bot 实时状态。
 
-First, run the development server:
+## 启动（裸跑）
+
+Bot 需先运行（`python start_bot.py` 或 Docker bot 服务）。
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd frontend
+npm ci
+npx prisma generate
+export DATABASE_URL="file:./prisma/data/dev.db"
+npx prisma db push && npx prisma db seed
+
+export BOT_WS_URL="ws://127.0.0.1:8080"
+export BOT_API_URL="http://127.0.0.1:8081"
+export PORT=3001
+export NEXTAUTH_URL="http://127.0.0.1:3001"
+export NEXTAUTH_SECRET="随机长字符串"
+npm run build && npm run start
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+浏览器：`http://localhost:3001`
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 技术栈
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Next.js · React · Tailwind · NextAuth · Prisma (SQLite) · WebSocket (`useLiveState`)
 
-## Learn More
+## 说明
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- 持仓/余额来自 bot WS，不直连 Polymarket
+- 暂停/恢复通过 `BOT_API_URL` 写入 `logs/runtime_config.json`
+- 项目总览见根目录 [README.md](../README.md)

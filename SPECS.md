@@ -1,5 +1,8 @@
 # Polymarket Arbitrage Bot — Technical Specification
 
+> **已废弃 / DEPRECATED** — 早期设计草案（Latency Arb、Redis/Postgres、WebAuthn 等均未按此文实现）。  
+> 请以根目录 **[README.md](./README.md)** 与 **[deploy/README.md](./deploy/README.md)** 为准。
+
 **Stack:** C++ trading core · Next.js dashboard · WebAuthn-gated control plane
 **Target markets:** Polymarket binary "Up or Down" markets (BTC/ETH/SOL/XRP, 5m & 15m windows)
 **Reference price feed:** Binance WebSocket
