@@ -586,6 +586,30 @@ std::optional<LegInHedgePosition> RiskManager::find_open_lih_by_asset(
     return std::nullopt;
 }
 
+std::optional<LegInHedgePosition> RiskManager::find_open_lih_for_market(
+    const trading::MarketInfo& market) const {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    std::string want = market.asset;
+    std::transform(want.begin(), want.end(), want.begin(), ::tolower);
+    for (const auto& [id, p] : open_lih_positions_) {
+        std::string have = p.asset;
+        std::transform(have.begin(), have.end(), have.begin(), ::tolower);
+        if (have != want || p.window_minutes != market.window_minutes) continue;
+
+        const bool end_match = p.end_date_ts > 0 && market.end_date_ts > 0 &&
+                                 std::abs(p.end_date_ts - market.end_date_ts) < 2.0;
+        const bool yes_match = !p.yes_token_id.empty() &&
+                               (p.yes_token_id == market.yes_token_id ||
+                                p.yes_token_id == market.no_token_id);
+        const bool no_match = !p.no_token_id.empty() &&
+                              (p.no_token_id == market.yes_token_id ||
+                               p.no_token_id == market.no_token_id);
+
+        if (end_match || yes_match || no_match) return p;
+    }
+    return std::nullopt;
+}
+
 namespace {
 std::string lih_slot_key(const std::string& asset, int window_minutes) {
     std::string a = asset;
@@ -667,6 +691,15 @@ void RiskManager::clear_open_lih_positions() {
     lih_rebalance_inflight_.clear();
     if (n > 0) {
         spdlog::info("Cleared {} open LIH position(s) from memory", n);
+    }
+}
+
+void RiskManager::clear_closed_lih_positions() {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    const size_t n = closed_lih_positions_.size();
+    closed_lih_positions_.clear();
+    if (n > 0) {
+        spdlog::info("Cleared {} closed LIH record(s) from memory", n);
     }
 }
 
@@ -757,7 +790,7 @@ std::unordered_map<std::string, LegInHedgePosition> RiskManager::get_open_lih_po
 
 LegInHedgePosition RiskManager::register_lih_open_leg1(
     const trading::MarketInfo& market, bool buy_yes, double price, double shares, double now_sec,
-    bool is_paper, bool debit_balance) {
+    bool is_paper, bool debit_balance, bool is_shadow) {
     std::lock_guard<std::recursive_mutex> lock(mtx_);
     LegInHedgePosition pos;
     pos.lih_id = "LIH-" + market.asset + "-" + std::to_string(static_cast<uint64_t>(now_sec * 1000.0));
@@ -772,6 +805,7 @@ LegInHedgePosition RiskManager::register_lih_open_leg1(
     pos.is_neg_risk = market.is_neg_risk;
     pos.opened_at = now_sec;
     pos.paper_mode = is_paper;
+    pos.is_shadow = is_shadow;
 
     const double cost = price * shares;
     const double fee = cost * fee_rate_;
@@ -791,8 +825,10 @@ LegInHedgePosition RiskManager::register_lih_open_leg1(
     if (!is_paper && debit_balance) {
         ++lih_session_legs_used_;
     }
-    total_lih_trades_++;
-    const char* mode_tag = !debit_balance ? "SHADOW" : (is_paper ? "PAPER" : "LIVE");
+    if (!is_shadow) {
+        total_lih_trades_++;
+    }
+    const char* mode_tag = is_shadow ? "SHADOW" : (is_paper ? "PAPER" : "LIVE");
     spdlog::info("[LIH {}] LEG1 {} | {} {:.2f}sh @ {:.4f} | cost ${:.2f} | bal ${:.2f}",
                  mode_tag,
                  pos.lih_id, buy_yes ? "YES" : "NO", shares, price, cost, current_balance_);
@@ -871,6 +907,13 @@ std::optional<LegInHedgePosition> RiskManager::register_lih_close(
     if (it == open_lih_positions_.end()) return std::nullopt;
 
     LegInHedgePosition pos = it->second;
+    if (pos.is_shadow) {
+        open_lih_positions_.erase(it);
+        lih_rebalance_inflight_.erase(lih_id);
+        spdlog::info("[LIH SHADOW] discarded {} | {} (no trade record)", lih_id, exit_reason);
+        return std::nullopt;
+    }
+
     const double matched = std::min(pos.yes_shares, pos.no_shares);
     const double yes_proceeds = pos.yes_shares * yes_exit;
     const double no_proceeds = pos.no_shares * no_exit;
@@ -912,6 +955,8 @@ void RiskManager::sync_lih_from_markets(const std::vector<trading::MarketInfo>& 
     for (auto& [id, p] : open_lih_positions_) {
         (void)id;
         for (const auto& m : markets) {
+            if (p.asset != m.asset || p.window_minutes != m.window_minutes) continue;
+
             bool token_match = false;
             if (!p.yes_token_id.empty() &&
                 (p.yes_token_id == m.yes_token_id || p.yes_token_id == m.no_token_id)) {
@@ -921,9 +966,10 @@ void RiskManager::sync_lih_from_markets(const std::vector<trading::MarketInfo>& 
                 (p.no_token_id == m.yes_token_id || p.no_token_id == m.no_token_id)) {
                 token_match = true;
             }
-            const bool slot_match =
-                p.asset == m.asset && p.window_minutes == m.window_minutes;
-            if (!token_match && !slot_match) continue;
+            const bool end_match = p.end_date_ts > 0 && m.end_date_ts > 0 &&
+                                   std::abs(p.end_date_ts - m.end_date_ts) < 2.0;
+            if (!token_match && !end_match) continue;
+
             if (p.end_date_ts <= 0 && m.end_date_ts > 0) p.end_date_ts = m.end_date_ts;
             if (p.condition_id.empty() && !m.condition_id.empty()) p.condition_id = m.condition_id;
             if (p.yes_token_id.empty()) p.yes_token_id = m.yes_token_id;
@@ -946,6 +992,19 @@ int RiskManager::purge_expired_lih_open(double now_sec, double grace_sec) {
     }
     int closed = 0;
     for (const auto& id : ids) {
+        bool shadow = false;
+        {
+            std::lock_guard<std::recursive_mutex> lock(mtx_);
+            auto it = open_lih_positions_.find(id);
+            if (it != open_lih_positions_.end()) shadow = it->second.is_shadow;
+        }
+        if (shadow) {
+            std::lock_guard<std::recursive_mutex> lock(mtx_);
+            open_lih_positions_.erase(id);
+            lih_rebalance_inflight_.erase(id);
+            closed++;
+            continue;
+        }
         if (register_lih_close(id, 0.5, 0.5, "Expired window (purged)", now_sec)) {
             closed++;
         }
@@ -1421,7 +1480,7 @@ boost::json::object lih_position_to_json(const LegInHedgePosition& p) {
     o["window_minutes"] = p.window_minutes;
     o["is_neg_risk"] = p.is_neg_risk;
     o["paper_mode"] = p.paper_mode;
-    o["exit_reason"] = p.exit_reason;
+    o["is_shadow"] = p.is_shadow;
     o["rebalance_count"] = p.rebalance_count;
     o["entry_fees"] = p.entry_fees;
     if (p.closed_at) o["closed_at"] = *p.closed_at;
@@ -1449,6 +1508,7 @@ bool lih_position_from_json(const boost::json::object& o, LegInHedgePosition& p)
         p.window_minutes = o.contains("window_minutes") ? static_cast<int>(o.at("window_minutes").as_int64()) : 5;
         p.is_neg_risk = o.contains("is_neg_risk") && o.at("is_neg_risk").as_bool();
         p.paper_mode = !o.contains("paper_mode") || o.at("paper_mode").as_bool();
+        p.is_shadow = o.contains("is_shadow") && o.at("is_shadow").as_bool();
         p.exit_reason = o.contains("exit_reason") ? std::string(o.at("exit_reason").as_string()) : "";
         p.rebalance_count = o.contains("rebalance_count") ? static_cast<int>(o.at("rebalance_count").as_int64()) : 0;
         p.entry_fees = o.contains("entry_fees") ? o.at("entry_fees").as_double() : 0.0;
@@ -1540,12 +1600,16 @@ boost::json::object RiskManager::export_paper_state() const {
     root["closed_dh_positions"] = std::move(closed_dh);
 
     boost::json::object open_lih;
-    for (const auto& [id, p] : open_lih_positions_) open_lih[id] = lih_position_to_json(p);
+    for (const auto& [id, p] : open_lih_positions_) {
+        if (p.is_shadow) continue;
+        open_lih[id] = lih_position_to_json(p);
+    }
     root["open_lih_positions"] = std::move(open_lih);
 
     boost::json::array closed_lih;
     size_t lih_start = closed_lih_positions_.size() > 200 ? closed_lih_positions_.size() - 200 : 0;
     for (size_t i = lih_start; i < closed_lih_positions_.size(); ++i) {
+        if (closed_lih_positions_[i].is_shadow) continue;
         closed_lih.push_back(lih_position_to_json(closed_lih_positions_[i]));
     }
     root["closed_lih_positions"] = std::move(closed_lih);
@@ -1645,7 +1709,9 @@ bool RiskManager::import_paper_state(const boost::json::object& doc) {
         if (doc.contains("closed_lih_positions") && doc.at("closed_lih_positions").is_array()) {
             for (const auto& v : doc.at("closed_lih_positions").as_array()) {
                 LegInHedgePosition p;
-                if (lih_position_from_json(v.as_object(), p)) closed_lih_positions_.push_back(p);
+                if (lih_position_from_json(v.as_object(), p)) {
+                    if (!p.is_shadow) closed_lih_positions_.push_back(p);
+                }
             }
         }
 
@@ -1689,11 +1755,15 @@ boost::json::object RiskManager::export_live_lih_state() const {
     root["total_lih_trades"] = total_lih_trades_;
     root["lih_pnl"] = lih_pnl_;
     boost::json::object open_lih;
-    for (const auto& [id, p] : open_lih_positions_) open_lih[id] = lih_position_to_json(p);
+    for (const auto& [id, p] : open_lih_positions_) {
+        if (p.is_shadow) continue;
+        open_lih[id] = lih_position_to_json(p);
+    }
     root["open_lih_positions"] = std::move(open_lih);
     boost::json::array closed_lih;
     size_t lih_start = closed_lih_positions_.size() > 200 ? closed_lih_positions_.size() - 200 : 0;
     for (size_t i = lih_start; i < closed_lih_positions_.size(); ++i) {
+        if (closed_lih_positions_[i].is_shadow) continue;
         closed_lih.push_back(lih_position_to_json(closed_lih_positions_[i]));
     }
     root["closed_lih_positions"] = std::move(closed_lih);
@@ -1727,7 +1797,9 @@ bool RiskManager::import_live_lih_state(const boost::json::object& doc) {
         if (doc.contains("closed_lih_positions") && doc.at("closed_lih_positions").is_array()) {
             for (const auto& v : doc.at("closed_lih_positions").as_array()) {
                 LegInHedgePosition p;
-                if (lih_position_from_json(v.as_object(), p)) closed_lih_positions_.push_back(p);
+                if (lih_position_from_json(v.as_object(), p)) {
+                    if (!p.is_shadow) closed_lih_positions_.push_back(p);
+                }
             }
         }
 

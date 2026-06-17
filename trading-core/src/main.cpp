@@ -202,6 +202,18 @@ static bool env_flag_true(const std::unordered_map<std::string, std::string>& en
     return default_val;
 }
 
+static int env_int(const std::unordered_map<std::string, std::string>& env, const std::string& key,
+                   int default_val, int min_v, int max_v) {
+    auto it = env.find(key);
+    if (it == env.end()) return default_val;
+    try {
+        int v = std::stoi(it->second);
+        return std::max(min_v, std::min(max_v, v));
+    } catch (...) {
+        return default_val;
+    }
+}
+
 // --- 4. 实盘余额同步：调用 fetch_balance.py 刷新 RiskManager 当前余额 ---
 static void sync_live_balance(risk::RiskManager& risk_manager) {
 #ifdef _WIN32
@@ -831,12 +843,15 @@ int main() {
         std::string clob_bridge_host = env.count("CLOB_BRIDGE_HOST") ? env["CLOB_BRIDGE_HOST"] : "127.0.0.1";
         int clob_bridge_port = env.count("CLOB_BRIDGE_PORT") ? std::stoi(env["CLOB_BRIDGE_PORT"]) : 8081;
         std::string clob_bridge_path = env.count("CLOB_BRIDGE_PATH") ? env["CLOB_BRIDGE_PATH"] : "/internal/clob/order";
+        const int wallet_sync_interval_sec = env_int(env, "WALLET_SYNC_INTERVAL_SEC", 2, 1, 120);
+        const int gamma_market_refresh_sec = env_int(env, "GAMMA_MARKET_REFRESH_SEC", 5, 3, 120);
 
-        spdlog::info("Starting Core v3.0 (LIH) | Mode: {} | Bal: ${:.2f} | Auto-redeem: {} | DH dry-run: {} | LIH dry-run: {}",
+        spdlog::info("Starting Core v3.0 (LIH) | Mode: {} | Bal: ${:.2f} | Auto-redeem: {} | DH dry-run: {} | LIH dry-run: {} | wallet_sync={}s | gamma_refresh={}s",
                      paper_mode ? "PAPER" : "LIVE", starting_balance,
                      auto_redeem ? "on" : "off",
                      live_dh_dry_run ? "on" : "off",
-                     live_lih_dry_run ? "on" : "off");
+                     live_lih_dry_run ? "on" : "off",
+                     wallet_sync_interval_sec, gamma_market_refresh_sec);
 
         // --- E. 网络 IO 上下文：Feed 线程（Binance/Polymarket WS）与 Gamma REST ---
         boost::asio::io_context feed_ioc;
@@ -1120,8 +1135,8 @@ int main() {
         auto execute_lih_action = [&](const LegInAction& act, double now_sec) {
             if (!paper_mode) {
                 const bool ok = router.submit_lih_action(act, now_sec);
-                if (ok && lih_enabled && live_state_persist) {
-                    persistence::save_live_lih_state(risk_manager, live_state_path, live_lih_dry_run);
+                if (ok && lih_enabled && live_state_persist && !live_lih_dry_run) {
+                    persistence::save_live_lih_state(risk_manager, live_state_path, false);
                 }
                 return;
             }
@@ -1379,11 +1394,9 @@ int main() {
         std::this_thread::sleep_for(std::chrono::seconds(3));
         auto last_market_refresh = std::chrono::system_clock::now();
         
-        // --- S. 后台线程：每 60s 实盘余额同步（fetch_balance.py）---
-        // Start balance sync thread
-        std::thread balance_thread([&]() {
+        // --- S. 后台线程：实盘余额同步（fetch_balance.py，间隔 WALLET_SYNC_INTERVAL_SEC）---
+        std::thread balance_thread([&, wallet_sync_interval_sec]() {
             while (true) {
-                std::this_thread::sleep_for(std::chrono::seconds(60));
                 if (!paper_mode) {
 #ifdef _WIN32
                     FILE* pipe = popen("python fetch_balance.py", "r");
@@ -1404,6 +1417,7 @@ int main() {
                         pclose(pipe);
                     }
                 }
+                std::this_thread::sleep_for(std::chrono::seconds(wallet_sync_interval_sec));
             }
         });
         balance_thread.detach();
@@ -1459,8 +1473,8 @@ int main() {
                     });
                 }
             }
-            if (loop_start - last_market_refresh > std::chrono::seconds(60)) {
-                // 每 60s 刷新 Up-Down 市场列表与 token 订阅
+            if (loop_start - last_market_refresh > std::chrono::seconds(gamma_market_refresh_sec)) {
+                // 定期刷新 Up-Down 市场列表与 token 订阅（GAMMA_MARKET_REFRESH_SEC）
                 last_market_refresh = loop_start;
                 std::thread([&refresh_markets]() { refresh_markets(); }).detach();
             }
@@ -1488,7 +1502,7 @@ int main() {
                     if (!live_lih_dry_run) {
                         const int pending_resolved = router.poll_lih_pending_fills(now_sec_loop);
                         if (pending_resolved > 0 && live_state_persist) {
-                            persistence::save_live_lih_state(risk_manager, live_state_path, live_lih_dry_run);
+                            persistence::save_live_lih_state(risk_manager, live_state_path, false);
                         }
                     }
                 }
@@ -1499,9 +1513,10 @@ int main() {
                 last_paper_save = loop_start;
                 persistence::save_paper_state(risk_manager, paper_state_path);
             }
-            if (!paper_mode && lih_enabled && live_state_persist && loop_start - last_live_save > std::chrono::seconds(10)) {
+            if (!paper_mode && lih_enabled && live_state_persist && !live_lih_dry_run
+                && loop_start - last_live_save > std::chrono::seconds(10)) {
                 last_live_save = loop_start;
-                persistence::save_live_lih_state(risk_manager, live_state_path, live_lih_dry_run);
+                persistence::save_live_lih_state(risk_manager, live_state_path, false);
             }
             std::cout << store.get_dashboard_json() << std::endl; // → dashboard_bridge stdout
             std::this_thread::sleep_for(std::chrono::milliseconds(250));

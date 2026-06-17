@@ -29,37 +29,17 @@ def _outcome_side(outcome: str) -> str:
     return ""
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--prune-only", action="store_true", help="only drop expired open rows")
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="print reconciled slots without writing live_state.json",
-    )
-    parser.add_argument(
-        "--merge",
-        action="store_true",
-        help="merge chain slots into existing open_lih_positions instead of replacing",
-    )
-    args = parser.parse_args()
+def _pair_sec() -> float:
+    raw = os.getenv("LIH_RECONCILE_PAIR_SEC", "180").strip()
+    try:
+        return max(30.0, float(raw))
+    except ValueError:
+        return 180.0
 
-    if args.prune_only:
-        sys.path.insert(0, str(ROOT / "scripts"))
-        from prune_live_lih import prune_live_state
 
-        prune_live_state()
-        return 0
-
-    live_path = Path(os.getenv("LIVE_STATE_PATH", "logs/live_state.json"))
-    now = time.time()
-    trades = fetch_user_trades(limit=80)
-    if trades and isinstance(trades[0], dict) and trades[0].get("error"):
-        print("ERROR:", trades[0]["error"], file=sys.stderr)
-        return 1
-
-    # One LIH slot per asset+window+market (merge YES/NO legs into one row).
-    slots: dict[str, dict] = {}
+def _legs_from_trades(trades: list[dict], *, now: float) -> list[dict]:
+    """Extract active BUY legs from activity rows."""
+    legs: list[dict] = []
     for t in trades:
         if str(t.get("side", "")).upper() != "BUY":
             continue
@@ -85,43 +65,184 @@ def main() -> int:
         leg = _outcome_side(str(t.get("outcome") or ""))
         if not leg:
             continue
-        token_id = str(t.get("tokenID") or "")
-        slot_key = f"{asset}|{int(window)}|{int(end_ts) if end_ts else title}"
-        row = slots.setdefault(
-            slot_key,
+        shares = float(t.get("size") or 0)
+        if shares <= 0:
+            continue
+        cost = float(t.get("usdcSize") or 0) or (
+            float(t.get("price") or 0) * shares
+        )
+        legs.append(
             {
                 "asset": asset,
                 "window_minutes": int(window),
                 "title": title,
                 "end_date_ts": end_ts or 0.0,
-                "opened_at": float(t.get("timestamp") or 0),
-                "yes_shares": 0.0,
-                "no_shares": 0.0,
-                "yes_cost": 0.0,
-                "no_cost": 0.0,
-                "yes_token_id": "",
-                "no_token_id": "",
-            },
+                "timestamp": float(t.get("timestamp") or 0),
+                "leg": leg,
+                "shares": shares,
+                "cost": cost,
+                "token_id": str(t.get("tokenID") or ""),
+            }
         )
-        shares = float(t.get("size") or 0)
-        cost = float(t.get("usdcSize") or 0) or (
-            float(t.get("price") or 0) * shares
-        )
-        if leg == "yes":
-            row["yes_shares"] += shares
-            row["yes_cost"] += cost
-            if token_id:
-                row["yes_token_id"] = token_id
-        else:
-            row["no_shares"] += shares
-            row["no_cost"] += cost
-            if token_id:
-                row["no_token_id"] = token_id
-        ts = float(t.get("timestamp") or 0)
-        if ts and (not row["opened_at"] or ts < row["opened_at"]):
-            row["opened_at"] = ts
+    return legs
 
-    if not slots:
+
+def _merge_leg_into_row(row: dict, leg: dict) -> None:
+    if leg["leg"] == "yes":
+        row["yes_shares"] += leg["shares"]
+        row["yes_cost"] += leg["cost"]
+        if leg["token_id"]:
+            row["yes_token_id"] = leg["token_id"]
+    else:
+        row["no_shares"] += leg["shares"]
+        row["no_cost"] += leg["cost"]
+        if leg["token_id"]:
+            row["no_token_id"] = leg["token_id"]
+    ts = leg["timestamp"]
+    if ts and (not row["opened_at"] or ts < row["opened_at"]):
+        row["opened_at"] = ts
+        row["title"] = leg["title"]
+        row["end_date_ts"] = leg["end_date_ts"] or row["end_date_ts"]
+
+
+def _pair_legs_into_rounds(legs: list[dict], pair_sec: float) -> list[dict]:
+    """Pair leg1 YES / hedge NO (or vice versa) within time window — not by market title."""
+    legs = sorted(legs, key=lambda x: x["timestamp"])
+    used: set[int] = set()
+    rounds: list[dict] = []
+
+    for i, a in enumerate(legs):
+        if i in used:
+            continue
+        row = {
+            "asset": a["asset"],
+            "window_minutes": a["window_minutes"],
+            "title": a["title"],
+            "end_date_ts": a["end_date_ts"] or 0.0,
+            "opened_at": a["timestamp"] or 0.0,
+            "yes_shares": 0.0,
+            "no_shares": 0.0,
+            "yes_cost": 0.0,
+            "no_cost": 0.0,
+            "yes_token_id": "",
+            "no_token_id": "",
+        }
+        _merge_leg_into_row(row, a)
+        used.add(i)
+
+        # Prefer opposite leg in same asset+window within pair_sec (LIH leg1→hedge).
+        best_j: int | None = None
+        best_dt = pair_sec + 1.0
+        for j, b in enumerate(legs):
+            if j in used:
+                continue
+            if a["asset"] != b["asset"] or a["window_minutes"] != b["window_minutes"]:
+                continue
+            if a["leg"] == b["leg"]:
+                continue
+            if not a["timestamp"] or not b["timestamp"]:
+                continue
+            dt = abs(a["timestamp"] - b["timestamp"])
+            if dt <= pair_sec and dt < best_dt:
+                best_j = j
+                best_dt = dt
+        if best_j is not None:
+            _merge_leg_into_row(row, legs[best_j])
+            used.add(best_j)
+
+        # Same-side duplicates in same round (shouldn't happen often).
+        for j, b in enumerate(legs):
+            if j in used:
+                continue
+            if a["asset"] != b["asset"] or a["window_minutes"] != b["window_minutes"]:
+                continue
+            if a["leg"] != b["leg"]:
+                continue
+            if not a["timestamp"] or not b["timestamp"]:
+                continue
+            if abs(a["timestamp"] - b["timestamp"]) <= pair_sec:
+                _merge_leg_into_row(row, b)
+                used.add(j)
+
+        rounds.append(row)
+    return rounds
+
+
+def _find_existing_lih_id(row: dict, open_lih: dict, pair_sec: float) -> str | None:
+    """Match chain row to in-memory lih_id (avoid duplicate -recon rows)."""
+    row_ts = float(row.get("opened_at") or 0)
+    row_end = float(row.get("end_date_ts") or 0)
+    asset = str(row.get("asset") or "").lower()
+    window = int(row.get("window_minutes") or 0)
+
+    best_id: str | None = None
+    best_score = 10_000.0
+    for lid, existing in open_lih.items():
+        if str(existing.get("asset", "")).lower() != asset:
+            continue
+        if int(existing.get("window_minutes") or 0) != window:
+            continue
+        ex_ts = float(existing.get("opened_at") or 0)
+        ex_end = float(existing.get("end_date_ts") or 0)
+        if row_ts and ex_ts and abs(row_ts - ex_ts) <= pair_sec:
+            score = abs(row_ts - ex_ts)
+            if not str(lid).endswith("-recon"):
+                score -= 0.5
+            if score < best_score:
+                best_score = score
+                best_id = lid
+            continue
+        if row_end and ex_end and abs(row_end - ex_end) < 1.0:
+            score = abs(row_end - ex_end) + 1.0
+            if not str(lid).endswith("-recon"):
+                score -= 0.5
+            if score < best_score:
+                best_score = score
+                best_id = lid
+    return best_id
+
+
+def _drop_stale_recon(open_lih: dict, fresh_ids: set[str]) -> None:
+    """Remove old -recon rows superseded by merged chain rounds."""
+    for lid in list(open_lih.keys()):
+        if str(lid).endswith("-recon") and lid not in fresh_ids:
+            del open_lih[lid]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--prune-only", action="store_true", help="only drop expired open rows")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print reconciled slots without writing live_state.json",
+    )
+    parser.add_argument(
+        "--merge",
+        action="store_true",
+        help="merge chain slots into existing open_lih_positions instead of replacing",
+    )
+    args = parser.parse_args()
+
+    if args.prune_only:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from prune_live_lih import prune_live_state
+
+        prune_live_state()
+        return 0
+
+    live_path = Path(os.getenv("LIVE_STATE_PATH", "logs/live_state.json"))
+    now = time.time()
+    pair_sec = _pair_sec()
+    trades = fetch_user_trades(limit=80)
+    if trades and isinstance(trades[0], dict) and trades[0].get("error"):
+        print("ERROR:", trades[0]["error"], file=sys.stderr)
+        return 1
+
+    legs = _legs_from_trades(trades, now=now)
+    rounds = _pair_legs_into_rounds(legs, pair_sec)
+
+    if not rounds:
         print("No active LIH-style BUY trades to reconcile.")
         return 0
 
@@ -162,24 +283,25 @@ def main() -> int:
                 open_lih = dict(existing["open_lih_positions"])
         except json.JSONDecodeError:
             pass
+    elif not args.merge:
+        open_lih = {}
 
-    for _key, row in slots.items():
+    fresh_ids: set[str] = set()
+    for row in rounds:
         total_shares = row["yes_shares"] + row["no_shares"]
         if total_shares <= 0:
             continue
         total_cost = row["yes_cost"] + row["no_cost"]
         yes_avg = row["yes_cost"] / row["yes_shares"] if row["yes_shares"] > 0 else 0.0
         no_avg = row["no_cost"] / row["no_shares"] if row["no_shares"] > 0 else 0.0
+
         lih_id = f"LIH-{row['asset']}-{int(row['opened_at'] * 1000)}-recon"
         if args.merge:
-            for existing in open_lih.values():
-                if (
-                    str(existing.get("asset", "")).lower() == row["asset"]
-                    and int(existing.get("window_minutes") or 0) == int(row["window_minutes"])
-                    and abs(float(existing.get("end_date_ts") or 0) - float(row["end_date_ts"] or 0)) < 1.0
-                ):
-                    lih_id = str(existing.get("lih_id") or lih_id)
-                    break
+            matched = _find_existing_lih_id(row, open_lih, pair_sec)
+            if matched:
+                lih_id = matched
+
+        fresh_ids.add(lih_id)
         pos = {
             "lih_id": lih_id,
             "asset": row["asset"],
@@ -197,6 +319,7 @@ def main() -> int:
             "rebalance_count": 0,
             "is_neg_risk": False,
             "paper_mode": False,
+            "is_shadow": False,
             "exit_reason": "",
         }
         open_lih[lih_id] = pos
@@ -206,8 +329,11 @@ def main() -> int:
         print(
             f"reconcile {row['asset']} {row['window_minutes']}m {held} "
             f"Y={row['yes_shares']:.2f}@{yes_avg:.4f} N={row['no_shares']:.2f}@{no_avg:.4f} "
-            f"(${total_cost:.2f})"
+            f"(${total_cost:.2f}) id={lih_id}"
         )
+
+    if args.merge:
+        _drop_stale_recon(open_lih, fresh_ids)
 
     doc["open_lih_positions"] = open_lih
     doc["total_lih_trades"] = max(int(doc.get("total_lih_trades") or 0), len(open_lih))

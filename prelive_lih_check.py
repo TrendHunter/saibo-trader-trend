@@ -137,8 +137,11 @@ def scan_logs(
         text = path.read_text(encoding="utf-8", errors="replace")
         for i, line in enumerate(text.splitlines(), 1):
             ts = _parse_ts(line)
-            if cutoff_ts is not None and ts is not None and ts < cutoff_ts:
-                continue
+            if cutoff_ts is not None:
+                if ts is None:
+                    continue
+                if ts < cutoff_ts:
+                    continue
             if any(p.search(line) for p in BLOCKED_PATTERNS):
                 report.blocked_count += 1
             ev = _parse_leg1(line, i, str(path))

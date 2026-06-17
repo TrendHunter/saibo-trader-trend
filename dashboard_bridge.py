@@ -111,6 +111,17 @@ def _apply_wallet_snapshot(detail: dict) -> bool:
     return True
 
 
+def _env_int(key: str, default: int, *, min_v: int = 1, max_v: int = 300) -> int:
+    raw = (os.getenv(key) or "").strip()
+    if not raw:
+        return default
+    try:
+        v = int(raw)
+        return max(min_v, min(max_v, v))
+    except ValueError:
+        return default
+
+
 def _wallet_sync_once() -> None:
     funder = (os.getenv("POLYMARKET_FUNDER") or "").strip()
     if not funder or funder.startswith("#"):
@@ -442,9 +453,10 @@ async def handler(websocket):
 
 def _wallet_sync_loop() -> None:
     """Refresh on-chain wallet total (cash + positions) for dashboard — read-only."""
+    interval = _env_int("WALLET_SYNC_INTERVAL_SEC", 2, min_v=1, max_v=120)
     while True:
         _wallet_sync_once()
-        time.sleep(60)
+        time.sleep(interval)
 
 
 def _live_maintenance_loop() -> None:
@@ -468,7 +480,7 @@ def _live_maintenance_loop() -> None:
                 if live_dry:
                     continue
                 subprocess.run(
-                    [sys.executable, "scripts/live_lih_reconcile.py"],
+                    [sys.executable, "scripts/live_lih_reconcile.py", "--merge"],
                     cwd=os.getcwd(),
                     timeout=45,
                     check=False,

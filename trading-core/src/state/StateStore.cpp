@@ -1,6 +1,7 @@
 #include "StateStore.h"
 #include <mutex>
 #include <fstream>
+#include <unordered_map>
 #include <boost/json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -741,6 +742,7 @@ std::string StateStore::get_dashboard_json() const {
         }
 
         for (const auto& p : risk_manager_->get_closed_lih_positions()) {
+            if (p.is_shadow) continue;
             const double ts = p.closed_at.value_or(p.opened_at);
             if (!after_baseline(ts)) continue;
             const double yes_avg = p.yes_shares > 0 ? p.yes_cost / p.yes_shares : 0.0;
@@ -835,6 +837,7 @@ std::string StateStore::get_dashboard_json() const {
 
         for (const auto& [id, p] : risk_manager_->get_open_lih_positions()) {
             if (!after_baseline(p.opened_at)) continue;
+            if (p.is_shadow) continue;
             const double yes_avg = p.yes_shares > 0 ? p.yes_cost / p.yes_shares : 0.0;
             const double no_avg = p.no_shares > 0 ? p.no_cost / p.no_shares : 0.0;
             const double matched = std::min(p.yes_shares, p.no_shares);
@@ -873,8 +876,25 @@ std::string StateStore::get_dashboard_json() const {
 
         std::sort(hist_rows.begin(), hist_rows.end(),
                   [](const HistRow& a, const HistRow& b) { return a.sort_ts > b.sort_ts; });
+        // Dedupe by trade id (keep newest row per id).
+        std::unordered_map<std::string, boost::json::object> hist_by_id;
+        std::vector<std::string> hist_order;
+        for (auto& row : hist_rows) {
+            const auto id_it = row.obj.find("id");
+            if (id_it == row.obj.end() || !id_it->value().is_string()) {
+                hist_order.push_back("__anon_" + std::to_string(hist_order.size()));
+                hist_by_id[hist_order.back()] = std::move(row.obj);
+                continue;
+            }
+            const std::string id = std::string(id_it->value().as_string());
+            if (!hist_by_id.count(id)) hist_order.push_back(id);
+            hist_by_id[id] = std::move(row.obj);
+        }
         boost::json::array hist_arr;
-        for (auto& row : hist_rows) hist_arr.push_back(std::move(row.obj));
+        for (const auto& id : hist_order) {
+            auto it = hist_by_id.find(id);
+            if (it != hist_by_id.end()) hist_arr.push_back(it->second);
+        }
         root["tradeHistory"] = std::move(hist_arr);
     } else {
         root["balance"] = 1000.0;

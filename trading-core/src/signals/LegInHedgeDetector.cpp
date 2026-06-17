@@ -200,7 +200,7 @@ std::optional<LegInAction> LegInHedgeDetector::evaluate(double now_ms, risk::Ris
         }
             if (blocked) continue;
 
-        auto open_lih = rm.find_open_lih_by_asset(market.asset, market.window_minutes);
+        auto open_lih = rm.find_open_lih_for_market(market);
         Quote q = quote_for(market);
         if (q.yes <= kFloatTol || q.no <= kFloatTol) {
             if (!open_lih) log_entry_status(market, key, now_sec, q, "no quote");

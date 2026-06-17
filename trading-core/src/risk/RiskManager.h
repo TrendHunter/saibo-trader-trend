@@ -87,6 +87,8 @@ struct LegInHedgePosition {
     int window_minutes = 5;
     bool is_neg_risk = false;
     bool paper_mode = true;
+    /** Live shadow (LIVE_LIH_DRY_RUN): in-memory slot only, no trade history / balance impact. */
+    bool is_shadow = false;
     std::optional<double> closed_at;
     std::optional<double> yes_exit_price;
     std::optional<double> no_exit_price;
@@ -173,6 +175,9 @@ public:
     void set_lih_max_matched_shares(double v);
     std::optional<LegInHedgePosition> find_open_lih_by_asset(
         const std::string& asset, int window_minutes) const;
+    /** Match open LIH to a specific Gamma market (end_ts / token ids), not asset+window only. */
+    std::optional<LegInHedgePosition> find_open_lih_for_market(
+        const trading::MarketInfo& market) const;
     /** True if another asset/window slot is open or in-flight (global one-slot mode). */
     bool lih_other_slot_busy(const std::string& asset, int window_minutes) const;
     /** Block new leg1 when session leg cap reached (conservative rollout). */
@@ -186,6 +191,7 @@ public:
 
     /** Drop all in-memory open LIH rounds (shadow reset / bad reconcile cleanup). */
     void clear_open_lih_positions();
+    void clear_closed_lih_positions();
     void set_lih_pause_after_round(bool v);
     bool get_lih_pause_after_round() const;
     /** Minimum wallet USDC before opening a new LIH leg1 (0 = off). */
@@ -205,7 +211,7 @@ public:
     std::unordered_map<std::string, LegInHedgePosition> get_open_lih_positions() const;
     LegInHedgePosition register_lih_open_leg1(
         const trading::MarketInfo& market, bool buy_yes, double price, double shares, double now_sec,
-        bool is_paper = true, bool debit_balance = true);
+        bool is_paper = true, bool debit_balance = true, bool is_shadow = false);
     void register_lih_add_leg(
         const std::string& lih_id, bool buy_yes, double price, double shares, bool is_paper = true,
         bool debit_balance = true);

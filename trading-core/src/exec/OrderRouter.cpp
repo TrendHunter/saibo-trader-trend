@@ -1371,7 +1371,7 @@ bool OrderRouter::submit_lih_action(const trading::LegInAction& act, double now_
         const std::string detail = fmt::format("{} {:.2f}sh @ {:.4f} ({})", side_label, shares, exec_px, act.note);
         if (live_lih_dry_run_) {
             risk_manager_.register_lih_open_leg1(
-                act.market, act.buy_yes, exec_px, shares, now_sec, true, false);
+                act.market, act.buy_yes, exec_px, shares, now_sec, true, false, true);
             shadow("LEG1", detail);
             return true;
         }

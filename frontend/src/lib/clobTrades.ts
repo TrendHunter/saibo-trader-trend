@@ -57,15 +57,17 @@ export function mergeTradeHistory(
 ): TradeRecord[] {
   const afterBaseline = (ts: number) => baselineTs <= 0 || ts <= 0 || ts >= baselineTs;
   const filteredBot = botRecords.filter((r) => afterBaseline(r.closedAt || r.openedAt || 0));
-  const seen = new Set(filteredBot.map((r) => r.id));
-  const merged = [...filteredBot];
+  const byId = new Map<string, TradeRecord>();
+  for (const r of filteredBot) {
+    byId.set(r.id, r);
+  }
   for (const fill of clobFills) {
     const rec = clobFillToTradeRecord(fill);
     if (!afterBaseline(rec.closedAt || rec.openedAt || 0)) continue;
-    if (seen.has(rec.id)) continue;
-    seen.add(rec.id);
-    merged.push(rec);
+    if (byId.has(rec.id)) continue;
+    byId.set(rec.id, rec);
   }
+  const merged = Array.from(byId.values());
   merged.sort((a, b) => {
     const ta = a.closedAt || a.openedAt || 0;
     const tb = b.closedAt || b.openedAt || 0;

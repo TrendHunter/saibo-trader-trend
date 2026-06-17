@@ -63,6 +63,7 @@ bool save_live_lih_state(const risk::RiskManager& rm, const std::string& path, b
         auto doc = rm.export_live_lih_state();
         if (shadow_mode) {
             doc["open_lih_positions"] = boost::json::object{};
+            doc["closed_lih_positions"] = boost::json::array{};
         }
         std::string json = boost::json::serialize(doc);
 
@@ -105,7 +106,8 @@ bool load_live_lih_state(risk::RiskManager& rm, const std::string& path, bool sh
 
         if (shadow_mode) {
             rm.clear_open_lih_positions();
-            spdlog::info("Shadow mode: open LIH rows not restored from disk (simulation only)");
+            rm.clear_closed_lih_positions();
+            spdlog::info("Shadow mode: LIH trade records not restored from disk");
         } else {
             spdlog::info("Live LIH state restored from {}", path);
         }

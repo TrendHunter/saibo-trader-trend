@@ -15,6 +15,11 @@ function fmtTime(ts: number): string {
 }
 
 function fmtUsd(n: number): string {
+  const abs = Math.abs(n);
+  if (abs > 0 && abs < 0.01) {
+    const sign = n < 0 ? "-" : "";
+    return `${sign}$${abs.toFixed(4)}`;
+  }
   return `$${n.toFixed(2)}`;
 }
 
