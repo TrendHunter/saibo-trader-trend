@@ -30,7 +30,7 @@
 
 ```bash
 cd /opt/polymarket-bot
-cp .env.example .env          # 编辑策略、PAPER_MODE、钱包
+cp .env.example .env          # 编辑 LIH 策略、钱包（PAPER_MODE 已废弃，保持 false）
 docker compose up -d --build
 
 docker compose ps
@@ -44,7 +44,7 @@ docker compose logs -f bot
 
 浏览器访问：`http://服务器IP:3001`（默认账号 `admin` / `admin`）。
 
-改 `.env` 后：`docker compose restart bot`（会重置纸面账本）。
+改 `.env` 后：`bash server_start_bot.sh`（裸跑）或 `docker compose restart bot`（Docker）。
 
 ---
 
@@ -104,96 +104,61 @@ docker compose up -d
 
 ---
 
-## 方式二：服务器裸跑（不用 Docker）
+## 方式二：VPS 裸跑（当前生产推荐）
 
-适合已有 Node/Python 环境、或想直接用 systemd 管进程的场景。
+与线上一致：`/opt/polymarket-bot`，Bot 用 `server_start_bot.sh`，Web 用 `server_start_web.sh` + `web.env`。完整步骤见根目录 **[README.md](../README.md#vps-裸跑部署当前生产与服务器一致)**。
 
 ### 环境依赖
 
 | 组件 | 版本建议 |
 |------|----------|
 | OS | Linux x86_64 |
-| Python | 3.12+ |
+| Python | 3.9+（venv 在 `.venv/`） |
 | Node.js | 20+ |
-| 构建 | gcc/clang、cmake、conan（见 `build.sh`） |
+| 构建 | gcc/clang、cmake、conan；**~1GB 内存 VPS 用 `build-lowmem.sh`** |
 
 ---
 
-### 1. 编译并启动 Bot
+### 1. Bot
 
 ```bash
 cd /opt/polymarket-bot
-cp .env.example .env
-# 编辑 .env
-
-# 编译 C++（首次较慢）
-./build.sh
-
-# Python 依赖
-python3 -m venv .venv
-source .venv/bin/activate
+cp .env.example .env && vi .env
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
-# 纸面模式可跳过；实盘会写 POLY_API_KEY 等到 .env
 python3 derive_and_update_keys.py
-
-# 前台运行（推荐：自检 + 配置摘要 + bridge/core，终端可见输出）
-python3 start_bot.py
-
-# 仅自检（不启动 bot）
-# python3 start_bot.py --preflight-only
-# python3 start_bot.py --json-only          # 脚本用，只打 JSON
-
-# 查看状态（bot 已在跑时）
-# python3 status_bot.py --live
-
-# 或直接跑 bridge（跳过 start_bot 包装）
-# python3 dashboard_bridge.py
+bash build-lowmem.sh          # 或 ./build.sh（内存充足时）
+bash server_start_bot.sh      # 后台：start_bot.py → bridge + trading-core
 ```
 
-**后台运行示例：**
-
-```bash
-mkdir -p logs
-nohup python3 start_bot.py >> logs/bridge.log 2>&1 &
-# 查看状态
-python3 status_bot.py --live
-```
-
-环境变量（可选）：
-
-| 变量 | 默认 | 说明 |
-|------|------|------|
-| `WS_HOST` | `0.0.0.0` | WS 监听地址 |
-| `WS_PORT` | `8080` | WS 端口 |
-
-验证：`curl` 不可用 WS，可用 `websocat ws://127.0.0.1:8080` 或看 `logs/bot.log`。
+日志：`logs/bridge.log`、`logs/bot.log`。HTTP API 默认 `127.0.0.1:8081`，WS `0.0.0.0:8080`（建议防火墙禁止公网访问 8080/8081）。
 
 ---
 
-### 2. 启动 Web 仪表盘（裸跑）
+### 2. Web 仪表盘（与服务器相同流程）
 
-Bot 必须先起来。另开终端：
+Bot 必须先起来。Web 配置与 bot **分离**：
 
 ```bash
-cd /opt/polymarket-bot/frontend
-npm ci
-npx prisma generate
-export DATABASE_URL="file:./prisma/data/dev.db"
-npx prisma db push
-npx prisma db seed
+cd /opt/polymarket-bot
+cp web.env.example web.env
+# 必填：AUTH_USERNAME、AUTH_PASSWORD、NEXTAUTH_URL=http://<公网IP>:3001
 
-export BOT_WS_URL="ws://127.0.0.1:8080"
-export PORT=3001
-export NEXTAUTH_URL="http://你的服务器IP:3001"
-export NEXTAUTH_SECRET="请换成随机长字符串"
-export AUTH_TRUST_HOST=true
-
-npm run build
-npm run start
+bash server_start_web.sh      # 首次 / 改 frontend 后：npm ci + build + 启动 + watchdog cron
+# 日常快速重启（不编译）：
+bash server_restart_web.sh
 ```
 
+| 文件 | 作用 |
+|------|------|
+| `web.env` | 登录账号、NEXTAUTH、BOT_WS_URL / BOT_API_URL |
+| `scripts/web_run.sh` | 启动 Next（standalone，低内存 heap） |
+| `scripts/web_watchdog.sh` | cron 检测 :3001，挂掉则 restart |
+| `logs/frontend.log` | Web 运行日志 |
+
 浏览器：`http://服务器IP:3001`。
+
+**从本地推送 Web：** `python scripts/remote_deploy.py web`
 
 ---
 
@@ -243,16 +208,17 @@ sudo systemctl enable --now polymarket-bot@bot-a
 
 ---
 
-## 纸面 vs 实盘
+## 运行模式（纸面已移除）
 
-| | 纸面 `PAPER_MODE=true` | 实盘 `PAPER_MODE=false` |
-|--|------------------------|-------------------------|
-| 钱包 | 可不填真实私钥 | 必须填 `POLYMARKET_PRIVATE_KEY` |
-| 余额 | 内存模拟，可持久化 JSON | 链上/SDK 真实余额 |
-| 多开 | 可同参数测策略 | **必须不同钱包** |
-| 到期 | 结构结算（纸面账本） | 结构结算 + 可选链上 redeem（`AUTO_REDEEM`） |
+| 模式 | 配置 | 说明 |
+|------|------|------|
+| **实盘** | `PAPER_MODE=false`（默认） | 真实 CLOB 下单 |
+| **Shadow** | `LIVE_LIH_DRY_RUN=true` | 只验证信号，不下单 |
+| ~~纸面~~ | ~~`PAPER_MODE=true`~~ | 已移除；核心会忽略 |
 
-**上实盘前必读：** [LIVE_READINESS.md](./LIVE_READINESS.md)
+实盘必须填 `POLYMARKET_PRIVATE_KEY`；多实例 **必须不同钱包**。到期结算 + 可选 `AUTO_REDEEM`。
+
+**上实盘前：** [LIVE_READINESS.md](./LIVE_READINESS.md)（部分内容仍提及纸面，以本表为准）。
 
 ---
 
@@ -274,11 +240,12 @@ docker compose -p bot-a -f docker-compose.multi.yml --env-file deploy/instances/
 docker compose -p bot-a -f docker-compose.multi.yml down
 ```
 
-**裸跑**
+**裸跑（VPS 生产）**
 
 ```bash
-./build.sh && python3 dashboard_bridge.py          # bot
-cd frontend && npm run build && npm run start      # web
+bash build-lowmem.sh && bash server_start_bot.sh     # bot
+bash server_start_web.sh                             # web（首次 / 改代码）
+bash server_restart_web.sh                           # web 快速重启
 ```
 
 ---
@@ -291,5 +258,7 @@ cd frontend && npm run build && npm run start      # web
 | `docker-compose.multi.yml` | 多实例 Docker 模板 |
 | `deploy/instances/*/compose.env` | 实例端口、NEXTAUTH |
 | `deploy/instances/*/bot.env` | 策略与钱包（挂载进容器或裸跑 `.env`） |
-| `build.sh` | 裸跑编译 C++ |
+| `web.env.example` | Web 登录 / NEXTAUTH / BOT_WS_URL |
+| `server_start_bot.sh` / `server_start_web.sh` | VPS 后台启动脚本 |
+| `build-lowmem.sh` | 低内存 VPS 编译 C++ |
 | `dashboard_bridge.py` | Bot 入口（含 WS 服务） |

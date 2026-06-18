@@ -46,6 +46,8 @@ ASSET_HINT_RE = re.compile(
     re.I,
 )
 
+CLOSED_RE = re.compile(r"\[LIH LIVE\] CLOSED (LIH-[a-z]+-\d+)", re.I)
+
 POLL_SEC = 8
 MAX_WAIT_SEC = 600
 SUCCESS_GRACE_SEC = 8
@@ -110,8 +112,19 @@ def stop_new_entries(c, reason: str) -> None:
     )
 
 
-def enable_round(c, risk_max: int, session_legs: int, expect_assets: list[str]) -> None:
-    print(f"=== ENABLE LIVE TEST (riskMax={risk_max}, assets={expect_assets}) ===", flush=True)
+def enable_round(
+    c,
+    risk_max: int,
+    session_legs: int,
+    expect_assets: list[str],
+    *,
+    pause_after_round: bool = True,
+) -> None:
+    print(
+        f"=== ENABLE LIVE TEST (riskMax={risk_max}, assets={expect_assets}, "
+        f"pause_after_round={pause_after_round}) ===",
+        flush=True,
+    )
     print(
         ro(
             c,
@@ -123,7 +136,7 @@ def enable_round(c, risk_max: int, session_legs: int, expect_assets: list[str]) 
     set_env(c, "RISK_MAX_CONCURRENT_POSITIONS", str(risk_max))
     set_env(c, "LIH_ONE_SLOT_GLOBAL", "false" if risk_max > 1 else "true")
     set_env(c, "LIH_SESSION_MAX_LEGS", str(session_legs))
-    set_env(c, "LIH_PAUSE_AFTER_ROUND", "true")
+    set_env(c, "LIH_PAUSE_AFTER_ROUND", "true" if pause_after_round else "false")
     if "btc" in expect_assets:
         set_env(c, "DH_ENABLE_5M_BTC", "true")
     if "eth" in expect_assets:
@@ -131,7 +144,7 @@ def enable_round(c, risk_max: int, session_legs: int, expect_assets: list[str]) 
     patch = {
         "patch": {
             "RISK_MAX_CONCURRENT_POSITIONS": str(risk_max),
-            "LIH_PAUSE_AFTER_ROUND": "true",
+            "LIH_PAUSE_AFTER_ROUND": "true" if pause_after_round else "false",
             "LIH_ONE_SLOT_GLOBAL": "false" if risk_max > 1 else "true",
             "LIH_SESSION_MAX_LEGS": str(session_legs),
         },
@@ -323,13 +336,21 @@ def main() -> int:
         default="btc",
         help="Comma-separated assets to enable/watch, e.g. btc,eth",
     )
+    ap.add_argument(
+        "--rounds",
+        type=int,
+        default=1,
+        help="Number of full rounds (CLOSED) to wait for before stopping (default 1)",
+    )
     args = ap.parse_args()
     if args.enable_live and args.watch_only:
         print("ERROR: use either --enable-live or --watch-only, not both", file=sys.stderr)
         return 2
     live_enable = bool(args.enable_live)
     expect = [x.strip().lower() for x in args.expect_assets.split(",") if x.strip()]
-    session_legs = 2 if len(expect) == 1 else max(2, len(expect) * 2)
+    rounds = max(1, args.rounds)
+    session_legs = max(2, rounds * 2) if len(expect) == 1 else max(2, len(expect) * 2 * rounds)
+    pause_after = rounds <= 1
 
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -352,7 +373,8 @@ def main() -> int:
     try:
         snap0 = api_snapshot(c)
         print(
-            f"=== MODE: {'LIVE ONE-ROUND' if live_enable else 'WATCH-ONLY (no entries)'} ===",
+            f"=== MODE: {'LIVE' if live_enable else 'WATCH-ONLY'} "
+            f"({rounds} round{'s' if rounds > 1 else ''}) ===",
             flush=True,
         )
         print(
@@ -364,15 +386,16 @@ def main() -> int:
             if int(snap0.get("riskMax") or 0) > 0 and int(snap0.get("open") or 0) > 0:
                 print("ERROR: open position already — run emergency stop first", file=sys.stderr)
                 return 2
-            enable_round(c, args.risk_max, session_legs, expect)
+            enable_round(c, args.risk_max, session_legs, expect, pause_after_round=pause_after)
         elif int(snap0.get("riskMax") or 0) > 0:
             print(
                 "WARN: riskMax>0 but watch-only — will NOT enable; bot may still trade if resumed",
                 flush=True,
             )
         line_count = int(ro(c, f"wc -l < '{PROJ}/bot.log'").split()[0] or "0")
+        closed_ids: list[str] = []
         print(
-            f"\n=== MONITOR {expect} until all outcomes (max {args.max_wait}s) ===",
+            f"\n=== MONITOR {expect} until {rounds} CLOSED (max {args.max_wait}s) ===",
             flush=True,
         )
         deadline = time.time() + args.max_wait
@@ -398,14 +421,29 @@ def main() -> int:
                         for a, s in assets.items():
                             if s.get("leg1"):
                                 s["closed"] = True
-                        if live_enable:
+                        m_closed = CLOSED_RE.search(ln)
+                        if m_closed:
+                            rid = m_closed.group(1)
+                            if rid not in closed_ids:
+                                closed_ids.append(rid)
+                                print(
+                                    f"\n[{ts}] round {len(closed_ids)}/{rounds} closed: {rid}",
+                                    flush=True,
+                                )
+                        if live_enable and len(closed_ids) >= rounds:
+                            stop_reason = f"{rounds}-rounds-done"
+                            snap = api_snapshot(c)
+                            print_outcomes(assets, stop_reason, snap)
+                            break
+                        elif live_enable and rounds <= 1:
                             stop_reason = "round-closed"
                             print(f"\n[{ts}] round closed — stopping monitor", flush=True)
                             break
                 line_count = total
-                if stop_reason == "round-closed":
-                    snap = api_snapshot(c)
-                    print_outcomes(assets, stop_reason, snap)
+                if stop_reason in ("round-closed", f"{rounds}-rounds-done"):
+                    if stop_reason == "round-closed":
+                        snap = api_snapshot(c)
+                        print_outcomes(assets, stop_reason, snap)
                     break
 
             snap = api_snapshot(c)
@@ -421,14 +459,14 @@ def main() -> int:
                 )
 
             done = all_outcomes_ready(assets, expect, now)
-            if done:
+            if done and rounds <= 1:
                 stop_reason = done
                 print(f"\n[{ts}] {done}", flush=True)
                 print_outcomes(assets, done, snap)
                 break
 
-            # Single-asset fast path when risk_max=1
-            if args.risk_max == 1 and len(expect) == 1:
+            # Single-asset fast path when risk_max=1 and one round only
+            if args.risk_max == 1 and len(expect) == 1 and rounds <= 1:
                 a = expect[0]
                 s = assets.get(a, asset_slot())
                 o = asset_outcome(a, s, now)
@@ -462,6 +500,20 @@ def main() -> int:
             print_outcomes(assets, stop_reason, snap)
 
         print("\n=== SUMMARY ===", flush=True)
+        if closed_ids:
+            print(f"closed rounds ({len(closed_ids)}): {', '.join(closed_ids)}", flush=True)
+        for rid in closed_ids:
+            asset = re.match(r"LIH-([a-z]+)-", rid, re.I)
+            a = asset.group(1).upper() if asset else "?"
+            print(f"--- {a} {rid} ---")
+            print(
+                ro(
+                    c,
+                    f"grep -a '{rid}' '{PROJ}/bot.log' "
+                    f"| grep -aE 'LEG1|HEDGE|CLOSED|dead|skip|abandon|REDEEM' | tail -12",
+                )
+            )
+            print()
         for a, s in sorted(assets.items()):
             rid = s.get("round_id") or a
             print(f"--- {a.upper()} ---")

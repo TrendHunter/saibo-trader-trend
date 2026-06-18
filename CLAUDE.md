@@ -19,8 +19,8 @@ The active strategy is **Leg-In Hedge (LIH)**: buy the cheap leg first, then reb
 ./build.sh                      # output: build/trading-core; incremental
 rm -rf build/CMakeCache.txt build/CMakeFiles   # force clean build
 
-# Run locally (derives L2 keys, starts bridge + core, opens CLI dashboard)
-cp .env.example .env            # configure first; PAPER_MODE=true by default
+# Run locally (live by default; use LIVE_LIH_DRY_RUN=true for shadow)
+cp .env.example .env            # configure wallet + LIH params
 ./start.sh                      # Windows: ./start_windows.ps1
 
 # Frontend (run from frontend/)
@@ -31,7 +31,7 @@ npx prisma db push && npx tsx prisma/seed.ts   # SQLite at prisma/dev.db
 
 # Docker (single instance: bot WS on :8080, frontend on :3001, admin/admin)
 docker compose up -d --build
-docker compose restart bot      # after .env changes; resets paper ledger
+docker compose restart bot      # after .env changes
 ```
 
 There is no test suite. `test_auth.py`, `test_json.py`, `test_sandbox.py` are ad-hoc manual scripts.
@@ -51,7 +51,7 @@ trading-core (C++) ──stdout JSON lines──> dashboard_bridge.py ──ws:/
 ### C++ core (`trading-core/src/`)
 
 - `main.cpp` — orchestrator: parses `.env` itself (`load_env(".env")`, no library), runs the event loop, fetches USDC balance via Polygon RPC, triggers auto-redeem.
-- `signals/LegInHedgeDetector` — primary LIH strategy (paper + live); `signals/DumpHedgeDetector` — legacy DH (inactive when `LIH_ENABLED=true`); `feeds/` — `BinanceFeed` (dashboard reference, `BINANCE_FEED_ENABLED`), `PolymarketFeed` (CLOB WS), `GammaClient` (market discovery); `risk/RiskManager`; `exec/OrderRouter` (paper sim + live via `clob_live.py`); `state/StateStore` and `PaperStateStore` / live state JSON persistence.
+- `signals/LegInHedgeDetector` — primary LIH strategy (live); `signals/DumpHedgeDetector` — legacy DH (inactive when `LIH_ENABLED=true`); `feeds/` — `BinanceFeed` (dashboard reference, `BINANCE_FEED_ENABLED`), `PolymarketFeed` (CLOB WS), `GammaClient` (market discovery); `risk/RiskManager`; `exec/OrderRouter` (live via `clob_live.py`); `state/StateStore` and live state JSON persistence. Paper mode removed — `PAPER_MODE=true` is ignored by the core.
 - Adding a `.cpp` file requires listing it in `trading-core/CMakeLists.txt` `SOURCES`.
 
 ### C++ ↔ Python coupling
@@ -71,7 +71,7 @@ So the core must run from the repo root, and changes to these scripts' stdout fo
 
 ### Configuration
 
-Everything is driven by the root `.env` (see `.env.example`): `PAPER_MODE`, `LIH_ENABLED`, wallet keys (`POLYMARKET_FUNDER`/`SIGNER`/`PRIVATE_KEY`), risk limits (`RISK_*`), LIH tuning (`LIH_LEG1_MAX_PRICE`, `LIH_TARGET_COMBINED`, …), market toggles (`DH_ENABLE_*`, shared by LIH), `FEE_RATE`, `MIN_ORDER_SIZE`, `AUTO_REDEEM`. Each bot process keeps positions in memory; multi-instance deployment requires isolating port/.env/logs/frontend DB per instance — see `deploy/README.md` and `deploy/instances/`.
+Everything is driven by the root `.env` (see `.env.example`) and `web.env` for the Next.js dashboard (see `web.env.example`). Key bot vars: `LIH_ENABLED`, wallet keys, `RISK_*`, LIH tuning, `DH_ENABLE_*`, `AUTO_REDEEM`. VPS production uses bare-metal `server_start_bot.sh` + `server_start_web.sh` at `/opt/polymarket-bot` — see root `README.md`.
 
 ## Docs
 
