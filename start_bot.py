@@ -35,9 +35,8 @@ def _enabled_assets(prefix: str, assets: tuple[str, ...]) -> str:
 
 def print_config_summary() -> None:
     load_dotenv()
-    paper = _env_bool("PAPER_MODE", False)
     lih = _env_bool("LIH_ENABLED", True)
-    mode = "纸面 PAPER" if paper else "实盘 LIVE"
+    mode = "实盘 LIVE"
     strategy = "LIH 分腿对冲" if lih else "DH 结构对冲（遗留）"
 
     print("=" * 60)
@@ -56,8 +55,7 @@ def print_config_summary() -> None:
             f"shares={os.getenv('LIH_LEG1_SHARES', '10')}  "
             f"force={os.getenv('LIH_FORCE_BALANCE_SECS', '45')}s"
         )
-        if not paper:
-            print(f"         live shadow (LIVE_LIH_DRY_RUN)={'开' if dry else '关 — 会真下单'}")
+        print(f"         live shadow (LIVE_LIH_DRY_RUN)={'开' if dry else '关 — 会真下单'}")
     else:
         print(
             f"  DH   : sum≤{os.getenv('DH_SUM_TARGET', '0.95')}  "
@@ -70,10 +68,9 @@ def print_config_summary() -> None:
         f"max_pos={os.getenv('RISK_MAX_CONCURRENT_POSITIONS', '3')}  "
         f"slot_cap={os.getenv('LIH_MAX_USDC_PER_SLOT', '0') or 'bal×pos'}"
     )
-    if not paper:
-        funder = os.getenv("POLYMARKET_FUNDER", "")
-        signer = os.getenv("POLYMARKET_SIGNER", funder)
-        print(f"  钱包 : funder={funder or '(未设置)'}  signer={signer or '(未设置)'}")
+    funder = os.getenv("POLYMARKET_FUNDER", "")
+    signer = os.getenv("POLYMARKET_SIGNER", funder)
+    print(f"  钱包 : funder={funder or '(未设置)'}  signer={signer or '(未设置)'}")
     print("=" * 60 + "\n")
 
 
@@ -109,8 +106,6 @@ def run_prelive_step(*, allow_live: bool = False, min_shadow_leg1: int = 0, live
 def maybe_reconcile_live_lih() -> None:
     """Rebuild live LIH memory from chain when real live mode starts (not shadow)."""
     load_dotenv()
-    if _env_bool("PAPER_MODE", False):
-        return
     if _env_bool("LIVE_LIH_DRY_RUN", True):
         print("[reconcile] skip — shadow mode (LIVE_LIH_DRY_RUN=true)", file=sys.stderr)
         return
@@ -170,31 +165,30 @@ def main() -> int:
             print(json.dumps(report, ensure_ascii=False))
         else:
             print_report(report)
-        if not report.get("paper_mode") and not report.get("ok"):
+        if not report.get("ok"):
             return 1
         return 0
 
     if not args.skip_preflight:
         report = run_preflight_step()
-        if not report.get("paper_mode") and not report.get("ok"):
-            print("❌ 实盘自检未通过，已中止启动。", file=sys.stderr)
+        if not report.get("ok"):
+            print("❌ 自检未通过，已中止启动。", file=sys.stderr)
             return 1
     else:
         if PREFLIGHT_PATH.is_file():
             try:
                 report = json.loads(PREFLIGHT_PATH.read_text(encoding="utf-8"))
                 ok = report.get("ok", True)
-                mode = (report.get("mode") or "paper").upper()
+                mode = (report.get("mode") or "live").upper()
                 print(f"[preflight] 使用已有报告 ({mode}) ok={ok}", file=sys.stderr)
             except Exception:
                 pass
 
     load_dotenv()
-    paper = _env_bool("PAPER_MODE", False)
     lih = _env_bool("LIH_ENABLED", True)
     live_dry = _env_bool("LIVE_LIH_DRY_RUN", True)
     skip_prelive = args.skip_prelive or _env_bool("START_SKIP_PRELIVE", False)
-    if not paper and lih and not skip_prelive:
+    if lih and not skip_prelive:
         allow = args.allow_live or not live_dry
         min_samples = args.min_shadow_leg1 if not live_dry else max(args.min_shadow_leg1, 1)
         prelive = run_prelive_step(
@@ -207,10 +201,10 @@ def main() -> int:
             return 1
         if live_dry and not prelive.get("ok"):
             print("⚠️  LIH prelive 有警告（shadow 模式仍启动，请先处理重复 LEG1）", file=sys.stderr)
-    elif skip_prelive and not paper and lih:
+    elif skip_prelive and lih:
         print("[prelive] 跳过（START_SKIP_PRELIVE / --skip-prelive）", file=sys.stderr)
 
-    if not paper and lih:
+    if lih:
         maybe_reconcile_live_lih()
 
     print_config_summary()

@@ -17,11 +17,6 @@ def main():
     # Load current vars
     load_dotenv(env_path)
 
-    paper_mode = os.getenv("PAPER_MODE", "true").strip().lower() in ("true", "1")
-    if paper_mode:
-        print("[*] Paper mode is active. Skipping L2 API key derivation.")
-        sys.exit(0)
-
     pk     = os.getenv("POLYMARKET_PRIVATE_KEY", "").strip()
     funder = os.getenv("POLYMARKET_FUNDER", "").strip()
     signer = os.getenv("POLYMARKET_SIGNER", "").strip()

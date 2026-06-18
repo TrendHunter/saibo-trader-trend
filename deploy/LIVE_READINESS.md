@@ -1,8 +1,6 @@
 # 实盘就绪清单 (Live Readiness)
 
-当前 bot 为 **DH-only**（结构对冲）。默认 **纸面模式**，不会动用真钱。
-
-在设置 `PAPER_MODE=false` 之前，请逐项确认。
+当前主策略为 **LIH（分腿对冲）**，默认 **实盘 LIVE**。上线前用 **`LIVE_LIH_DRY_RUN=true`** 做 shadow（只验簿、不下单），通过后再设 `false` 小资金试跑。
 
 ---
 
@@ -10,85 +8,66 @@
 
 | 步骤 | 命令 / 配置 | 通过标准 |
 |------|-------------|----------|
-| 纸面长跑 | `PAPER_MODE=true`，观察 24h+ | 无崩溃；DH 到期 PnL ≈ locked profit |
-| 钱包鉴权 | `python test_auth.py` | API 凭证输出成功（**仅验钱包，不验 C++ 下单**） |
-| 私钥 / Funder | `.env` 中 `POLYMARKET_PRIVATE_KEY`、`POLYMARKET_FUNDER` | 非占位符；live 启动时 bot 会校验 |
-| L2 API Key | 容器启动时 `derive_and_update_keys.py` | `.env` 中有 `POLY_API_KEY/SECRET/PASSPHRASE` |
-| Proxy 钱包 | 若用 Polymarket 代理：`POLYMARKET_SIGNER` ≠ `POLYMARKET_FUNDER` | 与 Polymarket 账户类型一致 |
+| Shadow 观察 | `LIVE_LIH_DRY_RUN=true`，跑数小时+ | 日志有 `[LIVE LIH SHADOW] LEG1/HEDGE`，无同 slot 重复 LEG1 |
+| 钱包鉴权 | `python derive_and_update_keys.py` | `.env` 写入 `POLY_API_*` |
+| 私钥 / Funder | `POLYMARKET_PRIVATE_KEY`、`POLYMARKET_FUNDER`、`POLYMARKET_SIGNER` | 非占位符；代理钱包 signer ≠ funder |
+| 余额 | `python fetch_balance.py` | 非零 USDC/pUSD |
+| 自检 | `python live_preflight.py` | 全部 OK |
+| LIH prelive | `python prelive_lih_check.py` | 无 duplicate slot（真下单前） |
 
 ---
 
-## 2. 纸面 vs 实盘差异
+## 2. Shadow vs 实盘
 
-| 能力 | 纸面 | 实盘 |
-|------|------|------|
-| DH 开仓 | 本地账本 | CLOB FAK 顺序双腿 |
-| DH 到期 | 结构结算（locked PnL） | 账本结构结算 + **`AUTO_REDEEM` 链上 redeem** |
-| 余额 | `PAPER_STARTING_BALANCE` / 持久化 JSON | `fetch_balance.py`（CLOB v2 + 链上 pUSD 回退）+ 60s 同步 |
-| Binance 图 | 可选，不参与开仓 | 同左 |
+| | Shadow `LIVE_LIH_DRY_RUN=true` | 实盘 `LIVE_LIH_DRY_RUN=false` |
+|--|-------------------------------|-------------------------------|
+| CLOB 下单 | 否 | 是 |
+| 余额 | 链上真实余额 | 同左 |
+| 到期 | 结构结算 + 可选 `AUTO_REDEEM` | 同左 |
+| 用途 | 验信号 / 日志 / prelive | 真钱 |
 
 ---
 
-## 3. 实盘 DH 流程（已实现）
+## 3. LIH 实盘流程（已实现）
 
-1. 深度检查（asks 汇总）
-2. **YES 腿 → NO 腿** 顺序下单（不重复记账）
-3. NO 失败 → 自动 unwind YES
-4. 到期 → 结构结算 + 异步 `redeem_positions.py`
-5. Redeem 成功 → 同步链上余额
+1. Leg1：便宜边 ask ≤ `LIH_LEG1_MAX_PRICE`
+2. Hedge：合价 ≤ `LIH_TARGET_COMBINED`
+3. Pending 成交轮询 + 部分成交接受
+4. 到期结构结算 → `AUTO_REDEEM` 链上 redeem
+5. `LIH_PAUSE_AFTER_ROUND` 可每局自动 pause
 
 ---
 
 ## 4. 首次实盘建议
 
-1. **极小资金**（如 $20–50 USDC + 少量 MATIC 作 gas）
-2. `PAPER_MODE=false`，`AUTO_REDEEM=true`
-3. 手动盯日志关键词：
-   - `[LIVE DH] OPENED`
-   - `SETTLED ... RESOLVED`
-   - `REDEEM OK` / `REDEEM FAIL`
-4. 在 [Polygonscan](https://polygonscan.com/) 核对 redeem 交易
-5. 确认 Polymarket 账户 USDC 与 bot 仪表盘余额一致
+1. **极小资金**（$20–50 USDC + EOA 上少量 POL 作 redeem gas）
+2. `LIVE_LIH_DRY_RUN=false`，`AUTO_REDEEM=true`，`LIH_PAUSE_AFTER_ROUND=true`
+3. 盯日志：`[LIH LIVE] LEG1` / `HEDGE` / `CLOSED` / `AUTO-REDEEM OK`
+4. Polymarket 网页核对持仓与日志一致
+5. 单轮验证：`python scripts/_watch_test_round.py --enable-live --expect-assets btc`
 
 ---
 
-## 5. 已知限制（上实盘前知晓）
-
-| 项目 | 状态 |
-|------|------|
-| DH 提前止盈 | 未实现（仅持有至窗口结束） |
-| C++ 签名 vs SDK 向量测试 | 未自动化，需首单人工核对 |
-| Fill 轮询 `GET /order/{id}` | 已实现（POST 后最多 5 次、150ms 间隔确认成交量） |
-| 历史 LA 策略 | 已移除 |
-| `test_auth` 通过 | **不等于** 可 unattended 实盘 |
-
----
-
-## 6. 回滚纸面
-
-```env
-PAPER_MODE=true
-```
-
-然后：
+## 5. 紧急停止
 
 ```bash
-docker compose restart bot
+python scripts/_emergency_stop_entries.py   # VPS
+# 或 Web 暂停 + RISK_MAX_CONCURRENT_POSITIONS=0
+pkill -f dashboard_bridge.py; pkill -f trading-core   # 本地
 ```
-
-纸面状态见 `PAPER_STATE_PERSIST` / `logs/paper_state.json`。
 
 ---
 
-## 7. 故障排查
+## 6. 故障排查
 
 | 现象 | 可能原因 |
 |------|----------|
-| `REDEEM FAIL` | RPC 超时、无 MATIC、condition_id 缺失、市场未 finalize |
-| `Live DH closed without condition_id` | Gamma 未返回 conditionId（检查市场刷新日志） |
-| 余额与链上不符 | redeem 未成功或 CLOB 余额未同步 |
-| DH 未开仓 | 合价/折价未达阈值、冷却中、同 asset 已有持仓、腿 < $1 |
+| `REDEEM FAIL` | RPC 超时、EOA 无 POL、市场未 finalize |
+| `HEDGE uncertain fill` / pending timeout | 流动性不足；窗口内可能单腿到期 |
+| `leg1 in-flight` / `slot busy` 卡下一窗 | 应已被 scrub 清理；查 `[LIH] scrub` 日志 |
+| 余额与链上不符 | redeem 未成功或 API 同步延迟 |
+| 不开 leg1 | 无 cheap leg、余额 < `LIH_MIN_BALANCE_USDC`、已 pause、session 满 |
 
 ---
 
-**结论：** 纸面可验证策略；实盘需按本清单 **小资金试跑 + 人工盯盘**，通过后再考虑加大规模。
+**结论：** 先 shadow → 小资金单轮 → 人工盯盘通过后再加大规模。详见 [docs/LIVE_SETUP.md](../docs/LIVE_SETUP.md) 与根 [README.md](../README.md)。

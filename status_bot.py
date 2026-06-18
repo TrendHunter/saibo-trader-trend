@@ -51,9 +51,10 @@ async def _print_live(ws_url: str, timeout: float) -> None:
         print(f"live: 无法连接 {ws_url} ({exc})")
         return
 
-    paper = d.get("isPaperMode", True)
+    dry = d.get("liveLihDryRun", False)
+    mode = "shadow" if dry else "实盘"
     print(
-        f"live: {'纸面' if paper else '实盘'}  "
+        f"live: {mode}  "
         f"余额=${float(d.get('balance') or 0):.2f}  "
         f"持仓={d.get('openCount', 0)}  "
         f"状态={d.get('statusReason') or d.get('status', '?')}"

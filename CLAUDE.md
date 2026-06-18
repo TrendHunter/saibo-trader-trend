@@ -51,7 +51,7 @@ trading-core (C++) ──stdout JSON lines──> dashboard_bridge.py ──ws:/
 ### C++ core (`trading-core/src/`)
 
 - `main.cpp` — orchestrator: parses `.env` itself (`load_env(".env")`, no library), runs the event loop, fetches USDC balance via Polygon RPC, triggers auto-redeem.
-- `signals/LegInHedgeDetector` — primary LIH strategy (live); `signals/DumpHedgeDetector` — legacy DH (inactive when `LIH_ENABLED=true`); `feeds/` — `BinanceFeed` (dashboard reference, `BINANCE_FEED_ENABLED`), `PolymarketFeed` (CLOB WS), `GammaClient` (market discovery); `risk/RiskManager`; `exec/OrderRouter` (live via `clob_live.py`); `state/StateStore` and live state JSON persistence. Paper mode removed — `PAPER_MODE=true` is ignored by the core.
+- `signals/LegInHedgeDetector` — primary LIH strategy (live); `signals/DumpHedgeDetector` — legacy DH (inactive when `LIH_ENABLED=true`); `feeds/` — `BinanceFeed`, `PolymarketFeed`, `GammaClient`; `risk/RiskManager`; `exec/OrderRouter` (live via `clob_live.py`); `state/StateStore` and live state JSON persistence.
 - Adding a `.cpp` file requires listing it in `trading-core/CMakeLists.txt` `SOURCES`.
 
 ### C++ ↔ Python coupling

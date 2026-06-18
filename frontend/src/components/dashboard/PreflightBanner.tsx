@@ -100,7 +100,7 @@ export function PreflightBanner() {
           )}
           {fee && (
             <p>
-              V2 下单 JSON 不含 feeRateBps（{String(fee.v2_order_json_includes_feeRateBps)}）；纸面/信号用 CLOB fd.r/e
+              V2 下单 JSON 不含 feeRateBps（{String(fee.v2_order_json_includes_feeRateBps)}）；信号验簿用 CLOB fd.r/e
               曲线，无 API 时回退 FEE_RATE={(Number(fee.env_FEE_RATE_flat) * 100).toFixed(2)}%
             </p>
           )}

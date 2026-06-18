@@ -50,7 +50,7 @@ def main() -> int:
             f"sed -i 's/^#POLYMARKET_PRIVATE_KEY=/POLYMARKET_PRIVATE_KEY=/' '{PROJ}/.env'"
         )
         run_out(client, env_fix)
-        run_out(client, f"grep -E '^(LIH_PAUSE_AFTER_ROUND|PAPER_MODE|LIVE_LIH_DRY_RUN|LIH_ENABLED)' '{PROJ}/.env'")
+        run_out(client, f"grep -E '^(LIH_PAUSE_AFTER_ROUND|LIVE_LIH_DRY_RUN|LIH_ENABLED)' '{PROJ}/.env'")
 
         # Clear stale reconcile rows before restart (shadow must not inherit ghost open slots).
         remote_clear = (

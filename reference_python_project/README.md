@@ -1,5 +1,8 @@
 # POLYMARKET ARBITRAGE BOT — OPENCLAW EDITION
 
+> **⚠️ 归档参考项目（非生产）** — 本目录为独立 Python 历史实现，与仓库根目录 **C++ LIH 生产栈无关**。  
+> 部署与运维请参阅根目录 [README.md](../README.md)。下文若出现 simulation / paper 等描述，仅适用于本参考代码。
+
 > **Polymarket resolves every 5 minutes. The oracle lags 2.7 seconds behind Binance. This bot lives in that gap.**
 
 Two independent arbitrage strategies — latency arb and structural dump-hedge — running simultaneously on Polygon, protected by adaptive Kelly sizing, per-strategy circuit breakers, and a real-time terminal dashboard.
@@ -217,22 +220,9 @@ STRATEGY=dump_hedge
 
 ---
 
-### Trading Mode
+### Trading Mode (reference project only)
 
-```env
-PAPER_MODE=true
-PAPER_STARTING_BALANCE=1000.0
-PAPER_SLIPPAGE_PCT=0.005
-```
-
-| Setting | What it means |
-|---------|---------------|
-| `PAPER_MODE=true` | Simulation only — orders are simulated locally, no real funds move |
-| `PAPER_MODE=false` | Live trading — real USDC is spent on Polygon |
-| `PAPER_STARTING_BALANCE` | Virtual balance used in paper mode for PnL and risk calculations |
-| `PAPER_SLIPPAGE_PCT` | Random ±slippage applied to simulated paper fills (e.g. `0.005` = ±0.5%). Makes paper results more realistic by accounting for spread and execution imperfection |
-
-Run paper mode for at least 200 trades and verify positive PnL before switching to live.
+This archived Python bot used simulation settings. **Production C++ LIH** uses `LIVE_LIH_DRY_RUN` for shadow and live orders when false — see [../README.md](../README.md).
 
 ---
 
@@ -482,7 +472,7 @@ The bot runs a live terminal dashboard using the Rich alternate screen, similar 
 │  Sum Tgt   0.93         │ │  DH Trades 3 total        │ └─────────────────────────┘
 │  Min Disc  0.02         │ │  Drawdown $0.00 (0.0%)    │
 └─────────────────────────┘ └──────────────────────────┘
-● RUNNING │ PAPER MODE │ POLYGON:137 │ STRATEGY: dump_hedge │ TELEGRAM: ✓ │ Ctrl+C
+● RUNNING │ SHADOW MODE │ POLYGON:137 │ STRATEGY: dump_hedge │ TELEGRAM: ✓ │ Ctrl+C
 ```
 
 **Panels:**
@@ -541,4 +531,4 @@ Pull requests are welcome. Check [CONTRIBUTING.md](CONTRIBUTING.md) for setup in
 
 ## Disclaimer
 
-This software is provided for educational and experimental purposes. Prediction market trading involves significant financial risk. Past performance does not guarantee future results. The arbitrage window narrows as more participants compete for the same inefficiencies. You are solely responsible for any financial losses. Always validate with paper trading before deploying real capital.
+This software is provided for educational and experimental purposes. Prediction market trading involves significant financial risk. Always validate with shadow mode (`LIVE_LIH_DRY_RUN=true`) before deploying real capital on the production stack.

@@ -20,7 +20,7 @@ def main() -> int:
     try:
         checks = [
             ("STOP_TRADING flag", f"test -f '{PROJ}/logs/STOP_TRADING' && echo YES || echo NO"),
-            ("PAPER_MODE", f"grep '^PAPER_MODE=' '{PROJ}/.env'"),
+            ("LIVE_LIH_DRY_RUN", f"grep '^LIVE_LIH_DRY_RUN=' '{PROJ}/.env'"),
             ("LIH_ENABLED", f"grep '^LIH_ENABLED=' '{PROJ}/.env'"),
             ("RISK_MAX_CONCURRENT", f"grep '^RISK_MAX_CONCURRENT_POSITIONS=' '{PROJ}/.env'"),
             ("PRIVATE_KEY commented", f"grep -n 'POLYMARKET_PRIVATE_KEY' '{PROJ}/.env' | head -3"),
@@ -37,8 +37,8 @@ def main() -> int:
             if label == "STOP_TRADING flag" and "YES" not in str(out):
                 print("FAIL: STOP_TRADING missing")
                 ok = False
-            if label == "PAPER_MODE" and "PAPER_MODE=true" not in str(out):
-                print("FAIL: not paper mode")
+            if label == "LIVE_LIH_DRY_RUN" and "LIVE_LIH_DRY_RUN=true" not in str(out):
+                print("FAIL: not shadow mode")
                 ok = False
             if label == "PRIVATE_KEY commented":
                 text = str(out)
@@ -50,7 +50,7 @@ def main() -> int:
                                 print("FAIL: private key line appears active")
                                 ok = False
 
-        print("\n=== restart bridge (paper + STOP_TRADING, key untouched) ===")
+        print("\n=== restart bridge (shadow + STOP_TRADING, key untouched) ===")
         print(run(client, f"bash '{PROJ}/server_start_bot.sh'", timeout=90))
         time.sleep(8)
         print(run(client, "pgrep -af 'start_bot|trading-core' || echo NONE", timeout=30))

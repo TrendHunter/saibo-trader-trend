@@ -35,7 +35,7 @@ if __name__ == "__main__":
     checks = [
         ("processes", "pgrep -af 'start_bot|trading-core|build.sh|cmake|ninja' || echo '(no matching processes)'"),
         ("binary", f"ls -la {PROJ}/build/trading-core* 2>/dev/null || echo '(no binary)'"),
-        ("env", f"grep -E '^(PAPER_MODE|LIVE_DH_DRY_RUN|DH_BOOK_AWARE)' {PROJ}/.env"),
+        ("env", f"grep -E '^(LIVE_DH_DRY_RUN|DH_BOOK_AWARE)' {PROJ}/.env"),
         ("uploaded", f"test -f {PROJ}/trading-core/src/signals/LegInHedgeDetector.cpp && echo LIH=ok || echo LIH=missing"),
         ("build_log", f"tail -8 {PROJ}/build/build.log 2>/dev/null || echo '(no build.log)'"),
         ("bot_log", f"tail -12 {PROJ}/bot.log 2>/dev/null || echo '(no bot.log)'"),

@@ -23,10 +23,10 @@ cd /app
 
 if [[ ! -f .env ]]; then
   echo "[entrypoint] .env not found — writing from container environment"
-  env | grep -E '^(PAPER_MODE|POLYMARKET_|PAPER_|RISK_|FEE_|TRAILING_|NEAR_|TAKE_PROFIT_|STOP_LOSS_|POSITION_|ENTRY_)' > .env || true
+  env | grep -E '^(POLYMARKET_|RISK_|FEE_|TRAILING_|NEAR_|TAKE_PROFIT_|STOP_LOSS_|POSITION_|ENTRY_|LIH_|DH_)' > .env || true
 fi
 
-echo "[entrypoint] Deriving L2 API keys (skipped in paper mode)..."
+echo "[entrypoint] Deriving L2 API keys..."
 python3 derive_and_update_keys.py || true
 
 echo "[entrypoint] Startup preflight (wallet / EIP-712 / fee model)..."

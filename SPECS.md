@@ -100,7 +100,7 @@ trading-core/
 │   ├── risk/
 │   │   └── RiskManager.{h,cpp}         # 4-layer failsafes
 │   ├── exec/
-│   │   ├── OrderRouter.{h,cpp}         # Async Boost.Beast HTTP POST, idempotency, slippage-simulated Paper Mode
+│   │   ├── OrderRouter.{h,cpp}         # Async Boost.Beast HTTP POST, idempotency
 │   │   └── EIP712Signer.{h,cpp}        # secp256k1 + Keccak struct hashing
 │   ├── state/
 │   │   └── StateStore.{h,cpp}          # In-mem state + snapshot
@@ -300,14 +300,14 @@ No secrets in committed env files. `.env.local` for dev, secrets manager in prod
 | Phase | Scope                                                        | Estimate                   |
 | ----- | ------------------------------------------------------------ | -------------------------- |
 | 1     | C++ core: Binance feed, Polymarket feed, basic state store   | 1.5 weeks                  |
-| 2     | EIP-712 signing, OrderRouter, paper-trade harness            | 1 week                     |
+| 2     | EIP-712 signing, OrderRouter, live order harness            | 1 week                     |
 | 3     | Port sigmoid model + risk engine, validate vs Python outputs | 1 week                     |
 | 4     | Strategy detectors (latency arb + dump-hedge)                | 1 week                     |
 | 5     | API gateway + gRPC contract                                  | 0.5 week                   |
 | 6     | Next.js dashboard (read-only first, then controls)           | 1.5 weeks                  |
 | 7     | WebAuthn, audit log, security hardening                      | 1 week                     |
 | 8     | Deployment, OS tuning, monitoring                            | 0.5 week                   |
-| 9     | **Paper-trading and tuning before live**                     | **1+ weeks — do not skip** |
+| 9     | **Shadow (LIVE_LIH_DRY_RUN) and tuning before live**         | **1+ weeks — do not skip** |
 
 **Total: 8–10 weeks** for one experienced developer.
 

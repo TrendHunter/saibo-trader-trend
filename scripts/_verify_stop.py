@@ -11,6 +11,6 @@ def run(cmd):
     _, o, e = c.exec_command(cmd, timeout=60)
     return (o.read() + e.read()).decode()
 print(run("pgrep -af 'trading-core|start_bot|ninja|build.sh' || echo STOPPED"))
-print(run(f"grep -E '^PAPER_MODE=|^LIH_ENABLED=' '{PROJ}/.env'"))
+print(run(f"grep -E '^LIH_ENABLED=' '{PROJ}/.env'"))
 print(run(f"test -f '{PROJ}/logs/STOP_TRADING' && echo STOP_TRADING=YES || echo STOP_TRADING=NO"))
 c.close()

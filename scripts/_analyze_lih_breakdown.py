@@ -23,7 +23,7 @@ def matched(p: dict) -> float:
 
 
 def main() -> None:
-    d = json.loads((ROOT / "logs/paper_state.json").read_text(encoding="utf-8"))
+    d = json.loads((ROOT / "logs/live_state.json").read_text(encoding="utf-8"))
     closed = d["closed_lih_positions"]
 
     wins, losses = [], []

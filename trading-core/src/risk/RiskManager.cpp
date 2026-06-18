@@ -650,13 +650,13 @@ constexpr double kLeg1InflightMaxSec = 120.0;
 bool RiskManager::lih_has_open_or_inflight(const std::string& asset, int window_minutes) const {
     std::lock_guard<std::recursive_mutex> lock(mtx_);
     const std::string key = lih_slot_key(asset, window_minutes);
-    if (lih_leg1_inflight_.count(key)) return true;
+    if (lih_leg1_inflight_.count(key)) return
     std::string want = asset;
     std::transform(want.begin(), want.end(), want.begin(), ::tolower);
     for (const auto& [id, p] : open_lih_positions_) {
         (void)id;
         if (p.asset == want && p.window_minutes == window_minutes && !p.paper_mode && !p.is_shadow) {
-            return true;
+            return
         }
     }
     return false;
@@ -676,7 +676,7 @@ bool RiskManager::lih_leg1_inflight_only(const std::string& asset, int window_mi
         std::transform(have.begin(), have.end(), have.begin(), ::tolower);
         if (have == want && p.window_minutes == window_minutes) return false;
     }
-    return true;
+    return
 }
 
 bool RiskManager::lih_other_slot_busy_unlocked(const std::string& asset, int window_minutes) const {
@@ -685,10 +685,10 @@ bool RiskManager::lih_other_slot_busy_unlocked(const std::string& asset, int win
     for (const auto& [id, p] : open_lih_positions_) {
         (void)id;
         if (p.paper_mode || p.is_shadow) continue;
-        if (lih_slot_key(p.asset, p.window_minutes) != key) return true;
+        if (lih_slot_key(p.asset, p.window_minutes) != key) return
     }
     for (const auto& inflight_key : lih_leg1_inflight_) {
-        if (inflight_key != key) return true;
+        if (inflight_key != key) return
     }
     return false;
 }
@@ -761,7 +761,7 @@ void RiskManager::scrub_lih_inflight_locks(double now_sec) {
             const auto sit = lih_leg1_inflight_since_.find(key);
             const double since = sit != lih_leg1_inflight_since_.end() ? sit->second : 0.0;
             if (since <= 0.0 || now_sec - since >= kLeg1InflightMaxSec) {
-                drop = true;
+                drop =
             }
         }
         if (drop) {
@@ -853,10 +853,10 @@ bool lih_should_pair_closed(const LegInHedgePosition& a, const LegInHedgePositio
     const char sa = lih_dominant_side(a);
     const char sb = lih_dominant_side(b);
     if (sa == ' ' || sb == ' ') return false;
-    if (sa != sb && sa != 'B' && sb != 'B') return true;
+    if (sa != sb && sa != 'B' && sb != 'B') return
     // Orphan YES/NO leg + row that already has both sides (split -recon history).
-    if ((sa == 'Y' || sa == 'N') && sb == 'B') return true;
-    if ((sb == 'Y' || sb == 'N') && sa == 'B') return true;
+    if ((sa == 'Y' || sa == 'N') && sb == 'B') return
+    if ((sb == 'Y' || sb == 'N') && sa == 'B') return
     return false;
 }
 
@@ -964,14 +964,14 @@ void RiskManager::consolidate_closed_lih_positions() {
                 }
             }
             if (best_j >= 0) {
-                used[static_cast<size_t>(best_j)] = true;
+                used[static_cast<size_t>(best_j)] =
                 cur = merge_closed_lih_pair(cur, sorted[static_cast<size_t>(best_j)]);
                 spdlog::info("[LIH] consolidated split closed rows -> {} | Y={:.1f} N={:.1f} pnl ${:+.2f}",
                              cur.lih_id, cur.yes_shares, cur.no_shares, cur.pnl_usdc.value_or(0.0));
             }
         }
 
-        used[i] = true;
+        used[i] =
         merged.push_back(std::move(cur));
     }
 
@@ -1071,7 +1071,7 @@ bool RiskManager::try_begin_lih_leg1(const std::string& asset, int window_minute
     if (get_open_position_count() >= max_concurrent_positions_) return false;
     lih_leg1_inflight_.insert(key);
     lih_leg1_inflight_since_[key] = static_cast<double>(std::time(nullptr));
-    return true;
+    return
 }
 
 void RiskManager::end_lih_leg1_inflight(const std::string& asset, int window_minutes) {
@@ -1093,7 +1093,7 @@ bool RiskManager::try_begin_lih_rebalance(const std::string& lih_id) {
     if (lih_rebalance_inflight_.count(lih_id)) return false;
     if (!open_lih_positions_.count(lih_id)) return false;
     lih_rebalance_inflight_.insert(lih_id);
-    return true;
+    return
 }
 
 void RiskManager::end_lih_rebalance_inflight(const std::string& lih_id) {
@@ -1153,7 +1153,7 @@ LegInHedgePosition RiskManager::register_lih_open_leg1(
     if (!is_shadow) {
         total_lih_trades_++;
     }
-    const char* mode_tag = is_shadow ? "SHADOW" : (is_paper ? "PAPER" : "LIVE");
+    const char* mode_tag = is_shadow ? "SHADOW" : "LIVE";
     spdlog::info("[LIH {}] LEG1 {} | {} {:.2f}sh @ {:.4f} | cost ${:.2f} | bal ${:.2f}",
                  mode_tag,
                  pos.lih_id, buy_yes ? "YES" : "NO", shares, price, cost, current_balance_);
@@ -1201,7 +1201,7 @@ void RiskManager::register_lih_add_leg(
             maybe_pause_after_lih_round("hedge complete");
         }
     }
-    const char* mode_tag = !debit_balance ? "SHADOW" : (is_paper ? "PAPER" : "LIVE");
+    const char* mode_tag = !debit_balance ? "SHADOW" : "LIVE";
     spdlog::info("[LIH {}] HEDGE {} | {} +{:.2f}sh @ {:.4f} | YES {:.2f} NO {:.2f} | #{:d} | bal ${:.2f}",
                  mode_tag,
                  lih_id, buy_yes ? "YES" : "NO", shares, price,
@@ -1228,7 +1228,7 @@ void RiskManager::register_lih_add_paired(
     if (debit_balance) {
         current_balance_ -= (yes_cost + no_cost + fee);
     }
-    const char* mode_tag = !debit_balance ? "SHADOW" : (is_paper ? "PAPER" : "LIVE");
+    const char* mode_tag = !debit_balance ? "SHADOW" : "LIVE";
     spdlog::info("[LIH {}] SCALE {} | +{:.2f} paired | YES {:.2f} NO {:.2f} | #{:d} | bal ${:.2f}",
                  mode_tag,
                  lih_id, shares, it->second.yes_shares, it->second.no_shares, n, current_balance_);
@@ -1304,11 +1304,11 @@ void RiskManager::sync_lih_from_markets(const std::vector<trading::MarketInfo>& 
             bool token_match = false;
             if (!p.yes_token_id.empty() &&
                 (p.yes_token_id == m.yes_token_id || p.yes_token_id == m.no_token_id)) {
-                token_match = true;
+                token_match =
             }
             if (!p.no_token_id.empty() &&
                 (p.no_token_id == m.yes_token_id || p.no_token_id == m.no_token_id)) {
-                token_match = true;
+                token_match =
             }
             const bool end_match = p.end_date_ts > 0 && m.end_date_ts > 0 &&
                                    std::abs(p.end_date_ts - m.end_date_ts) < 2.0;
@@ -1468,7 +1468,7 @@ bool RiskManager::resume() {
         }
         spdlog::info("Trading RESUMED.");
     }
-    return true;
+    return
 }
 
 bool RiskManager::reset_kill_switch(bool confirm) {
@@ -1483,7 +1483,7 @@ bool RiskManager::reset_kill_switch(bool confirm) {
         daily_starting_balance_ = current_balance_;
         spdlog::warn("KILL SWITCH RESET manually. Trading resumed. Balance: ${:.2f}", current_balance_);
     }
-    return true;
+    return
 }
 
 double RiskManager::net_lih_round_pnl(const LegInHedgePosition& p) const {
@@ -1740,7 +1740,7 @@ bool position_from_json(const boost::json::object& o, Position& p) {
         if (o.contains("closed_at")) p.closed_at = o.at("closed_at").as_double();
         if (o.contains("exit_price")) p.exit_price = o.at("exit_price").as_double();
         if (o.contains("pnl_usdc")) p.pnl_usdc = o.at("pnl_usdc").as_double();
-        return true;
+        return
     } catch (...) {
         return false;
     }
@@ -1807,7 +1807,7 @@ bool dh_position_from_json(const boost::json::object& o, DumpHedgePosition& p) {
         if (o.contains("yes_exit_price")) p.yes_exit_price = o.at("yes_exit_price").as_double();
         if (o.contains("no_exit_price")) p.no_exit_price = o.at("no_exit_price").as_double();
         if (o.contains("pnl_usdc")) p.pnl_usdc = o.at("pnl_usdc").as_double();
-        return true;
+        return
     } catch (...) {
         return false;
     }
@@ -1874,7 +1874,7 @@ bool lih_position_from_json(const boost::json::object& o, LegInHedgePosition& p)
         if (o.contains("yes_exit_price")) p.yes_exit_price = o.at("yes_exit_price").as_double();
         if (o.contains("no_exit_price")) p.no_exit_price = o.at("no_exit_price").as_double();
         if (o.contains("pnl_usdc")) p.pnl_usdc = o.at("pnl_usdc").as_double();
-        return true;
+        return
     } catch (...) {
         return false;
     }
@@ -1982,7 +1982,7 @@ bool RiskManager::import_live_lih_state(const boost::json::object& doc) {
         spdlog::info("Live LIH state restored | open={} closed={} session_legs={}/{}",
                      open_lih_positions_.size(), closed_lih_positions_.size(),
                      lih_session_legs_used_, lih_session_max_legs_);
-        return true;
+        return
     } catch (const std::exception& e) {
         spdlog::warn("import_live_lih_state failed: {}", e.what());
         return false;

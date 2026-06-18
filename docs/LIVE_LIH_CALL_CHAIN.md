@@ -1,6 +1,6 @@
 # 实盘 LIH 下单函数调用链
 
-前提：`PAPER_MODE=false`，`LIH_ENABLED=true`，`LIVE_LIH_DRY_RUN=false`，`USE_PYTHON_CLOB=true`（默认）。
+前提：`LIH_ENABLED=true`，`LIVE_LIH_DRY_RUN=false`，`USE_PYTHON_CLOB=true`（默认）。
 
 ---
 
@@ -20,8 +20,7 @@ main()                                                          [main.cpp]
          └─ return LegInAction { OpenLeg1 | CompleteHedge | ... }
 
       └─ execute_lih_action(act, now_sec)                       [main.cpp λ]
-         └─ [paper_mode==false]
-            └─ OrderRouter::submit_lih_action(act, now_sec)     [OrderRouter.cpp]
+         └─ OrderRouter::submit_lih_action(act, now_sec)     [OrderRouter.cpp]
 
                ┌─ OpenLeg1 ─────────────────────────────────────────────┐
                ├─ OrderRouter::fetch_book_ask_info(token_id)            │
@@ -60,7 +59,7 @@ main()                                                          [main.cpp]
                └─ [成交]                                                 │
                   └─ RiskManager::register_lih_open_leg1()              │  内存持仓 + 扣款
                      └─ persistence::save_live_lih_state()             │  [main.cpp 回调]
-                        └─ RiskManager::export_live_lih_state()        [PaperStateStore.cpp]
+                        └─ RiskManager::export_live_lih_state()        [LiveStateStore.cpp]
 ```
 
 **并行触发**（同样进入 `try_lih_evaluate`）：
@@ -151,7 +150,7 @@ NO leg 失败
 OrderRouter::submit_lih_action
 ├─ fetch_book_ask_info + 风控 + inflight 锁
 └─ live_lih_dry_run_
-   ├─ register_lih_open_leg1 / register_lih_add_*  (is_paper=false, debit_balance=false)
+   ├─ register_lih_open_leg1 / register_lih_add_*  (debit_balance=false)
    └─ shadow() → spdlog + push_telemetry  "[LIVE LIH SHADOW]"
 ```
 
@@ -200,6 +199,6 @@ execute_rest_order
 | `can_open_lih_leg` / `try_begin_lih_leg1` / `register_lih_*` | `trading-core/src/risk/RiskManager.cpp` |
 | `do_POST` `/internal/clob/*` | `dashboard_bridge.py` |
 | `post_fak_order` / `resolve_order_fill` | `clob_live.py` |
-| `save_live_lih_state` | `trading-core/src/state/PaperStateStore.cpp` |
+| `save_live_lih_state` | `trading-core/src/state/LiveStateStore.cpp` |
 
 更完整的业务说明见 [LIVE_LIH_ORDER_FLOW.md](./LIVE_LIH_ORDER_FLOW.md)。

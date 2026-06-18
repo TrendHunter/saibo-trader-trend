@@ -1,5 +1,7 @@
 # Architecture — OPENCLAW · POLYMARKET ARB BOT
 
+> **归档参考** — 独立 Python 历史实现，非 C++ LIH 生产栈。架构以根目录代码为准。
+
 > Technical reference for the dual-strategy Polymarket arbitrage bot.
 > For setup and usage, see [README.md](README.md).
 >

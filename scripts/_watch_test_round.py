@@ -128,7 +128,7 @@ def enable_round(
     print(
         ro(
             c,
-            f"grep -E '^(PAPER_MODE|LIVE_LIH_DRY_RUN|LIH_ENABLED|RISK_MAX|LIH_PAUSE|"
+            f"grep -E '^(LIVE_LIH_DRY_RUN|LIH_ENABLED|RISK_MAX|LIH_PAUSE|"
             f"DH_ENABLE_5M_ETH|LIH_ONE_SLOT)' '{PROJ}/.env'",
         ),
         flush=True,

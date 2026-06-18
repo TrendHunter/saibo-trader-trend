@@ -21,7 +21,7 @@
 # 注意:
 #   - `-p` 项目名决定网络/卷前缀，避免冲突
 #   - 实盘多开必须用不同 POLYMARKET_PRIVATE_KEY，否则同钱包重复下单
-#   - 纸面多开可用相同配置，但 PAPER_STARTING_BALANCE 各自独立（内存账本）
+#   - Shadow多开可用相同配置，但 STARTING_BALANCE 各自独立（内存账本）
 
 name: ${INSTANCE_NAME:-polymarket}
 

@@ -1,0 +1,7 @@
+# Copy to .deploy.local (gitignored) for scripts/deploy_production.py and remote_deploy.py
+DEPLOY_SSH_PASSWORD="your-vps-root-password"
+
+# Optional overrides (defaults in scripts/remote_deploy.py):
+# DEPLOY_HOST=70.34.221.132
+# DEPLOY_USER=root
+# DEPLOY_PROJ=/opt/polymarket-bot

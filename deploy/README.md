@@ -30,7 +30,7 @@
 
 ```bash
 cd /opt/polymarket-bot
-cp .env.example .env          # 编辑 LIH 策略、钱包（PAPER_MODE 已废弃，保持 false）
+cp .env.example .env          # 编辑 LIH 策略、钱包
 docker compose up -d --build
 
 docker compose ps
@@ -106,7 +106,7 @@ docker compose up -d
 
 ## 方式二：VPS 裸跑（当前生产推荐）
 
-与线上一致：`/opt/polymarket-bot`，Bot 用 `server_start_bot.sh`，Web 用 `server_start_web.sh` + `web.env`。完整步骤见根目录 **[README.md](../README.md#vps-裸跑部署当前生产与服务器一致)**。
+与线上一致：`/opt/polymarket-bot`，一键 `python scripts/deploy_production.py`，或 Bot 用 `server_start_bot.sh`、Web 用 `server_start_web.sh` + `web.env`。完整步骤见根目录 **[README.md](../README.md#vps-裸跑部署当前生产与服务器一致)**。
 
 ### 环境依赖
 
@@ -208,17 +208,16 @@ sudo systemctl enable --now polymarket-bot@bot-a
 
 ---
 
-## 运行模式（纸面已移除）
+## 运行模式
 
 | 模式 | 配置 | 说明 |
 |------|------|------|
-| **实盘** | `PAPER_MODE=false`（默认） | 真实 CLOB 下单 |
-| **Shadow** | `LIVE_LIH_DRY_RUN=true` | 只验证信号，不下单 |
-| ~~纸面~~ | ~~`PAPER_MODE=true`~~ | 已移除；核心会忽略 |
+| **实盘** | `LIVE_LIH_DRY_RUN=false` | 真实 CLOB 下单 |
+| **Shadow** | `LIVE_LIH_DRY_RUN=true` | 只验信号，不下单 |
 
 实盘必须填 `POLYMARKET_PRIVATE_KEY`；多实例 **必须不同钱包**。到期结算 + 可选 `AUTO_REDEEM`。
 
-**上实盘前：** [LIVE_READINESS.md](./LIVE_READINESS.md)（部分内容仍提及纸面，以本表为准）。
+**上实盘前：** [LIVE_READINESS.md](./LIVE_READINESS.md)
 
 ---
 

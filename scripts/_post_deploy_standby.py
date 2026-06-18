@@ -34,8 +34,8 @@ def main() -> int:
         stop = run_out(client, f"test -f '{PROJ}/logs/STOP_TRADING' && echo STOP=yes || echo STOP=no")
         if "STOP=yes" not in stop:
             ok = False
-        paper = run_out(client, f"grep '^PAPER_MODE=' '{PROJ}/.env'")
-        if "PAPER_MODE=true" not in paper:
+        paper = run_out(client, f"grep '^LIVE_LIH_DRY_RUN=' '{PROJ}/.env'")
+        if "LIVE_LIH_DRY_RUN=true" not in paper:
             ok = False
         key = run_out(client, f"grep 'POLYMARKET_PRIVATE_KEY' '{PROJ}/.env' | head -1")
         if key.strip() and not key.strip().startswith("#"):

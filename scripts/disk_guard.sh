@@ -1,6 +1,6 @@
 #!/bin/bash
 # Disk guard: when root filesystem use >= threshold, prune old build artifacts and logs.
-# Safe for running bot — never deletes live_state.json, paper_state.json, or trading-core binary.
+# Safe for running bot — never deletes live_state.json or trading-core binary.
 #
 # Env:
 #   DISK_GUARD_THRESHOLD  — trigger percent (default 95)
@@ -126,7 +126,7 @@ cleanup_logs() {
   mkdir -p "$PROJ/logs"
 
   # Never touch state / runtime config
-  local keep_names="live_state.json paper_state.json runtime_config.json preflight.json"
+  local keep_names="live_state.json runtime_config.json preflight.json"
 
   for f in \
     "$PROJ/logs/bridge.log" \
@@ -145,7 +145,7 @@ cleanup_logs() {
 
   # Old state backups (keep recent)
   find "$PROJ/logs" -maxdepth 1 -type f \
-    \( -name 'live_state.json.bak.*' -o -name 'paper_state.json.*.bak' -o -name '*.pre-live*.bak' \) \
+    \( -name 'live_state.json.bak.*' -o -name '*.pre-live*.bak' \) \
     -mtime +"$LOG_KEEP_DAYS" -print 2>/dev/null | while read -r f; do
     maybe_rm "$f"
   done

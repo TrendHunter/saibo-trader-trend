@@ -39,10 +39,10 @@ using tcp = net::ip::tcp;
 // 职责：读取 .env → 初始化风控/行情/策略/下单 → 主循环输出 JSON 给 dashboard_bridge
 // 模块概览：
 //   1. 链上余额查询        fetch_usdc_balance*
-//   2. 配置加载            load_env / env_flag_true
+//   2. 配置加载            load_env / env_flag_
 //   3. 实盘余额同步        sync_live_balance
 //   4. 到期自动赎回        attempt_onchain_redeem_async
-//   5. 纸面模拟辅助        apply_paper_slippage / paper_hedge_liquidity_miss
+//   5. Legacy sim helpers (unused in live-only build)        apply_paper_slippage / paper_hedge_liquidity_miss
 //   6. 市场结算定价        try_binary_settlement_prices / official_settlement_prices
 //   7. LIH/DH 到期平仓     check_and_close_lih/dh_positions
 //   8. Web 热更新配置      apply_runtime_config
@@ -198,7 +198,7 @@ static bool env_flag_true(const std::unordered_map<std::string, std::string>& en
     std::string v = it->second;
     std::transform(v.begin(), v.end(), v.begin(), ::tolower);
     if (v == "false" || v == "0" || v == "no" || v == "off") return false;
-    if (v == "true" || v == "1" || v == "yes" || v == "on") return true;
+    if (v == "true" || v == "1" || v == "yes" || v == "on") return
     return default_val;
 }
 
@@ -279,7 +279,7 @@ static bool verify_venv_web3() {
         "print('ok')\""));
     if (out == "ok") {
         spdlog::info("venv web3 OK ({})", g_python_bin);
-        return true;
+        return
     }
     spdlog::critical(
         "venv web3 MISSING ({}) — output: {} | fix: .venv/bin/pip install 'web3>=6,<8'",
@@ -364,7 +364,7 @@ static void attempt_onchain_redeem_async(
     }).detach();
 }
 
-// --- 6. 纸面模拟辅助：滑点、对冲失败概率、LIH 各阶段额外滑点 ---
+// --- 6. Legacy sim helpers (slippage / miss probability) ---
 static double apply_paper_slippage(double price, bool is_buy, double slip_pct) {
     if (slip_pct <= 0.0 || price <= 0.0) return price;
     return is_buy ? price * (1.0 + slip_pct) : price * (1.0 - slip_pct);
@@ -561,27 +561,27 @@ static bool apply_dh_asset_config(StateStore& store, const std::string& k, const
     if (k == "DH_ENABLE_5M_BTC") {
         store.set_dh_asset_enabled(5, "btc", enabled);
         store.push_telemetry(fmt::format("CONFIG DH_ENABLE_5M_BTC={}", enabled ? "true" : "false"));
-        return true;
+        return
     }
     if (k == "DH_ENABLE_5M_ETH") {
         store.set_dh_asset_enabled(5, "eth", enabled);
         store.push_telemetry(fmt::format("CONFIG DH_ENABLE_5M_ETH={}", enabled ? "true" : "false"));
-        return true;
+        return
     }
     if (k == "DH_ENABLE_5M_SOL") {
         store.set_dh_asset_enabled(5, "sol", enabled);
         store.push_telemetry(fmt::format("CONFIG DH_ENABLE_5M_SOL={}", enabled ? "true" : "false"));
-        return true;
+        return
     }
     if (k == "DH_ENABLE_15M_BTC") {
         store.set_dh_asset_enabled(15, "btc", enabled);
         store.push_telemetry(fmt::format("CONFIG DH_ENABLE_15M_BTC={}", enabled ? "true" : "false"));
-        return true;
+        return
     }
     if (k == "DH_ENABLE_15M_ETH") {
         store.set_dh_asset_enabled(15, "eth", enabled);
         store.push_telemetry(fmt::format("CONFIG DH_ENABLE_15M_ETH={}", enabled ? "true" : "false"));
-        return true;
+        return
     }
     return false;
 }
@@ -686,16 +686,16 @@ static void apply_runtime_config(
                     store.push_telemetry(fmt::format("CONFIG FEE_RATE={}", v));
                 } else if (k == "DH_SUM_TARGET") {
                     sum_target = std::stod(v);
-                    dh_changed = true;
+                    dh_changed =
                 } else if (k == "DH_MIN_DISCOUNT") {
                     min_discount = std::stod(v);
-                    dh_changed = true;
+                    dh_changed =
                 } else if (k == "DH_COOLDOWN_SECONDS") {
                     cooldown = std::stod(v);
-                    dh_changed = true;
+                    dh_changed =
                 } else if (k == "DH_MIN_SECONDS_REMAINING") {
                     min_secs = std::stod(v);
-                    dh_changed = true;
+                    dh_changed =
                 } else if (k == "BINANCE_FEED_ENABLED") {
                     bool enabled = parse_config_bool(v);
                     store.set_binance_feed_enabled(enabled);
@@ -842,7 +842,7 @@ int main() {
             std::string pm = env["PAPER_MODE"];
             std::transform(pm.begin(), pm.end(), pm.begin(), ::tolower);
             if (pm == "true" || pm == "1") {
-                spdlog::warn("PAPER_MODE=true is ignored — this build runs LIVE only");
+                spdlog::warn("Legacy PAPER_MODE is ignored — live-only build");
             }
         }
         
@@ -909,7 +909,7 @@ int main() {
         const int gamma_market_refresh_sec = env_int(env, "GAMMA_MARKET_REFRESH_SEC", 5, 3, 120);
 
         spdlog::info("Starting Core v3.0 (LIH) | Mode: {} | Bal: ${:.2f} | Auto-redeem: {} | DH dry-run: {} | LIH dry-run: {} | wallet_sync={}s | gamma_refresh={}s",
-                     paper_mode ? "PAPER" : "LIVE", starting_balance,
+                     live_lih_dry_run ? "SHADOW" : "LIVE", starting_balance,
                      auto_redeem ? "on" : "off",
                      live_dh_dry_run ? "on" : "off",
                      live_lih_dry_run ? "on" : "off",
@@ -982,8 +982,8 @@ int main() {
 
         const std::string strategy = lih_enabled ? "leg_in" : "dump_hedge";
 
-        // --- H. 行情与纸面 realism：Binance 图表、官方 CLOB 订单簿、深度/滑点模拟 ---
-        bool binance_feed_enabled = true;
+        // --- H. Market feeds & optional depth/slippage sim (legacy) ---
+        bool binance_feed_enabled =
         if (env.count("BINANCE_FEED_ENABLED")) {
             std::string bf = env["BINANCE_FEED_ENABLED"];
             std::transform(bf.begin(), bf.end(), bf.begin(), ::tolower);
@@ -1115,7 +1115,7 @@ int main() {
                          reason.value_or("persisted state"));
         }
 
-        // --- M. 将风控/策略/纸面参数写入 StateStore，供 JSON 遥测与检测器读取 ---
+        // --- M. Push risk/strategy params into StateStore for telemetry ---
         store.set_risk_manager(&risk_manager);
         store.set_fee_rate(fee_rate);
         store.set_strategy(strategy);
@@ -1154,7 +1154,7 @@ int main() {
             } catch (...) {}
         }
 
-        // --- N. 下单路由：纸面模拟 / 实盘 CLOB（含 NegRisk 双签名器）---
+        // --- N. OrderRouter: live CLOB (NegRisk dual signer) ---
         exec::OrderRouter router(feed_ioc, feed_ctx, store, risk_manager, polymarket_host, polymarket_chain_id, verifying_contract, polymarket_pk, polymarket_signer, polymarket_funder, paper_mode, poly_api_key, poly_api_secret, poly_api_passphrase, neg_risk_exchange, live_dh_dry_run, live_lih_dry_run, use_python_clob, clob_bridge_host, clob_bridge_port, clob_bridge_path);
 
         // --- O. 外部客户端：Gamma（市场列表/结算/REST 兜底）+ Binance WS ---
@@ -1176,7 +1176,7 @@ int main() {
         std::unique_ptr<DumpHedgeDetector> dh_detector;
         std::unique_ptr<LegInHedgeDetector> lih_detector;
 
-        // LIH 动作执行：实盘走 OrderRouter；纸面本地 register + 深度/滑点/realism 模拟
+        // LIH actions: OrderRouter on live; legacy local sim path if paper_mode
         auto execute_lih_action = [&](const LegInAction& act, double now_sec) {
             if (!paper_mode) {
                 const bool ok = router.submit_lih_action(act, now_sec);
@@ -1490,7 +1490,7 @@ int main() {
             auto loop_start = std::chrono::system_clock::now();
             const bool poll_rest_book = book_aware_detect || paper_official_book;
             if (poll_rest_book &&
-                // 每 ~2.5s 拉官方 CLOB 订单簿（DH book-aware / 纸面官方定价）
+                // ~2.5s REST book poll (DH book-aware)
                 !rest_book_refreshing.load(std::memory_order_acquire) &&
                 loop_start - last_rest_book_poll > std::chrono::milliseconds(2500)) {
                 last_rest_book_poll = loop_start;
@@ -1519,7 +1519,7 @@ int main() {
                 if (!btc || btc->price <= 0) {
                     if (!rest_fallback_logged) {
                         spdlog::warn("Binance WS unavailable — using REST price polling");
-                        rest_fallback_logged = true;
+                        rest_fallback_logged =
                     }
                     poll_binance_rest();
                 }

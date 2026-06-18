@@ -285,7 +285,7 @@ export default function StrategiesPage() {
         <div className="mb-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-2.5 text-[13px] text-emerald-200/90">
           主策略：<span className="font-mono font-bold">{lihMode ? "LIH" : "DH（遗留）"}</span>
           {" · "}
-          模式：<span className="font-mono">{live.isPaperMode ? "纸面" : "实盘"}</span>
+          模式：<span className="font-mono">{live.liveLihDryRun !== false ? "Shadow" : "实盘"}</span>
           {" · "}
           状态：
           <span className="font-mono">
@@ -293,10 +293,11 @@ export default function StrategiesPage() {
               ? live.statusReason || "Bot 未连接"
               : live.statusReason || (botActive ? "运行中" : "已暂停")}
           </span>
-          {!live.isPaperMode && lihMode && (
-            <span className="ml-2 text-amber-200/90">
-              （实盘 LIH：{live.liveLihDryRun !== false ? "shadow 验簿，不发单" : "已关闭 dry-run，会真下单"}）
-            </span>
+          {live.liveLihDryRun !== false && lihMode && (
+            <span className="ml-2 text-amber-200/90">（验簿不发单）</span>
+          )}
+          {live.liveLihDryRun === false && lihMode && (
+            <span className="ml-2 text-emerald-200/90">（已关闭 dry-run，会真下单）</span>
           )}
         </div>
 
@@ -306,7 +307,7 @@ export default function StrategiesPage() {
               分腿对冲 (LIH)
             </CardTitle>
             <CardDescription className="text-white/40 text-[13px] leading-relaxed">
-              纸面：先买低价单腿，等合价合适再补对腿；flex 模式支持稀释与 paired scale。风控单笔上限见「风控限额」页。
+              先买低价单腿，等合价合适再补对腿；flex 模式支持稀释与 paired scale。风控单笔上限见「风控限额」页。
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">

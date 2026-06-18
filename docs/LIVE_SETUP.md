@@ -47,10 +47,9 @@ python3 -m venv .venv
 cp .env.example .env
 ```
 
-编辑 `.env`,实盘必改 5 项:
+编辑 `.env`,实盘必改 4 项:
 
 ```env
-PAPER_MODE=false
 POLYMARKET_FUNDER=0x<网站显示的代理地址>
 POLYMARKET_SIGNER=0x<私钥推导出的EOA地址>
 POLYMARKET_PRIVATE_KEY=0x<网站导出的私钥,64位hex>
@@ -167,15 +166,15 @@ pkill -f dashboard_bridge.py; pkill -f trading-core
 
 ---
 
-## 8. 回滚纸面 / 紧急停止
+## 8. 回滚 shadow / 紧急停止
 
 ```bash
 # 紧急停止
 pkill -f dashboard_bridge.py; pkill -f trading-core
 
-# 回滚纸面:.env 改一行
-PAPER_MODE=true
-# 然后重启。纸面账本在 logs/paper_state.json,删除即清零重来
+# 切回 shadow（不下单）:.env 改一行
+LIVE_LIH_DRY_RUN=
+# 然后重启
 ```
 
 内置熔断(无需配置即生效):日亏 20% 当日停手、总回撤 40% 永久停机(`RISK_DAILY_LOSS_LIMIT` / `RISK_TOTAL_DRAWDOWN_KILL`)。
@@ -202,7 +201,7 @@ PAPER_MODE=true
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp .env.example .env && vi .env        # PAPER_MODE=false + 钱包 4 项(见第 1-2 节)
+cp .env.example .env && vi .env        # 钱包 4 项(见第 1-2 节)
 .venv/bin/python derive_and_update_keys.py
 .venv/bin/python check_wallet_config.py
 .venv/bin/python fetch_balance.py      # 确认非零

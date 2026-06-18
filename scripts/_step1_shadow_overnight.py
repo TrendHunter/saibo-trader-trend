@@ -51,7 +51,6 @@ def main() -> int:
 
         env_cmds = (
             f"sed -i 's/^#POLYMARKET_PRIVATE_KEY=/POLYMARKET_PRIVATE_KEY=/' '{PROJ}/.env'; "
-            f"sed -i 's/^PAPER_MODE=.*/PAPER_MODE=false/' '{PROJ}/.env'; "
             f"grep -q '^LIVE_LIH_DRY_RUN=' '{PROJ}/.env' && "
             f"sed -i 's/^LIVE_LIH_DRY_RUN=.*/LIVE_LIH_DRY_RUN=true/' '{PROJ}/.env' || "
             f"echo 'LIVE_LIH_DRY_RUN=true' >> '{PROJ}/.env'; "
@@ -66,7 +65,7 @@ def main() -> int:
         run_out(client, env_cmds)
         run_out(
             client,
-            f"grep -E '^(PAPER_MODE|LIVE_LIH_DRY_RUN|LIH_ENABLED|START_SKIP_PRELIVE)' '{PROJ}/.env'",
+            f"grep -E '^(LIVE_LIH_DRY_RUN|LIH_ENABLED|START_SKIP_PRELIVE)' '{PROJ}/.env'",
         )
         key_line = run_out(
             client,
@@ -110,7 +109,7 @@ def main() -> int:
 
         run_out(
             client,
-            f"grep -E '^(PAPER_MODE|LIVE_LIH_DRY_RUN|LIH_ENABLED)' '{PROJ}/.env'; "
+            f"grep -E '^(LIVE_LIH_DRY_RUN|LIH_ENABLED)' '{PROJ}/.env'; "
             f"test -f '{PROJ}/logs/STOP_TRADING' && echo STOP=yes || echo STOP=no",
         )
 

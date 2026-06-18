@@ -195,11 +195,10 @@ def check_env(require_shadow: bool = True) -> CheckReport:
     load_dotenv()
     report = CheckReport()
 
-    paper = os.getenv("PAPER_MODE", "true").strip().lower() in ("false", "0", "no", "off")
     lih = os.getenv("LIH_ENABLED", "true").strip().lower() not in ("false", "0", "no", "off")
     live_dry = os.getenv("LIVE_LIH_DRY_RUN", "true").strip().lower() not in ("false", "0", "no", "off")
 
-    if not paper and lih:
+    if lih:
         if require_shadow:
             report.add_check(
                 "LIVE_LIH_DRY_RUN",
@@ -252,7 +251,7 @@ def check_env(require_shadow: bool = True) -> CheckReport:
             "LIVE_STATE_PERSIST=on" if persist else "⚠ 重启会丢 LIH 持仓记忆",
         )
     else:
-        report.add_check("mode", True, "纸面模式 — 环境门禁跳过")
+        report.add_check("mode", True, "LIH 未启用 — 跳过 LIH 门禁")
 
     return report
 

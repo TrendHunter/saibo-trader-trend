@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Startup self-check: mode, wallet, EIP-712 params, fee model, first-live checklist."""
+"""Startup self-check: wallet, EIP-712 params, fee model, first-live checklist."""
 
 from __future__ import annotations
 
@@ -69,16 +69,8 @@ def _env_bool(key: str, default: bool) -> bool:
     return default
 
 
-def _mask(s: str, show: int = 6) -> str:
-    s = (s or "").strip()
-    if len(s) <= show * 2:
-        return "***"
-    return f"{s[:show]}...{s[-4:]}"
-
-
 def run_preflight() -> dict:
     load_dotenv()
-    paper = _env_bool("PAPER_MODE", True)
     lih = _env_bool("LIH_ENABLED", True)
     live_lih_dry = _env_bool("LIVE_LIH_DRY_RUN", True)
     pk = os.getenv("POLYMARKET_PRIVATE_KEY", "").strip()
@@ -94,8 +86,7 @@ def run_preflight() -> dict:
 
     report: dict = {
         "ts": datetime.now(timezone.utc).isoformat(),
-        "mode": "paper" if paper else "live",
-        "paper_mode": paper,
+        "mode": "live",
         "wallet": {
             "funder": funder,
             "signer": signer,
@@ -116,14 +107,14 @@ def run_preflight() -> dict:
         "fee_model": {
             "env_FEE_RATE_flat": fee_flat,
             "v2_order_json_includes_feeRateBps": False,
-            "note": "V2 下单 JSON/签名不含 feeRateBps；费率由 CLOB 市场 fd.r/fd.e 曲线计算，纸面已改用动态模型",
+            "note": "V2 下单 JSON/签名不含 feeRateBps；费率由 CLOB 市场 fd.r/fd.e 曲线计算",
             "simulation": "polymarket_v2_curve_with_flat_fallback",
         },
         "api_keys": {
             "POLY_API_KEY_set": bool(os.getenv("POLY_API_KEY", "").strip()),
         },
         "checks": [],
-        "live_first_order_checklist": [] if paper else (CHECKLIST_LIVE_LIH if lih else CHECKLIST_LIVE_DH),
+        "live_first_order_checklist": CHECKLIST_LIVE_LIH if lih else CHECKLIST_LIVE_DH,
         "warnings": [],
         "ok": True,
     }
@@ -133,18 +124,16 @@ def run_preflight() -> dict:
         if not passed:
             report["ok"] = False
 
-    check("PAPER_MODE", True, f"{'纸面' if paper else '实盘'} (PAPER_MODE={'true' if paper else 'false'})")
-
-    if not paper:
-        check("POLYMARKET_PRIVATE_KEY", report["wallet"]["private_key_set"], "实盘需要有效私钥")
-        check("POLYMARKET_FUNDER", bool(funder), "实盘需要 funder 地址")
-        check("POLY_API_KEY", report["api_keys"]["POLY_API_KEY_set"], "运行 derive_and_update_keys.py 或手动配置")
-        if lih:
-            check(
-                "LIVE_LIH_DRY_RUN",
-                True,
-                "shadow 验簿" if live_lih_dry else "⚠ false — 将发送真实 LIH 订单",
-            )
+    check("MODE", True, "实盘 LIVE")
+    check("POLYMARKET_PRIVATE_KEY", report["wallet"]["private_key_set"], "需要有效私钥")
+    check("POLYMARKET_FUNDER", bool(funder), "需要 funder 地址")
+    check("POLY_API_KEY", report["api_keys"]["POLY_API_KEY_set"], "运行 derive_and_update_keys.py 或手动配置")
+    if lih:
+        check(
+            "LIVE_LIH_DRY_RUN",
+            True,
+            "shadow 验簿" if live_lih_dry else "⚠ false — 将发送真实 LIH 订单",
+        )
 
     # CLOB reachability
     host = os.getenv("POLYMARKET_HOST", "https://clob.polymarket.com").rstrip("/")
@@ -184,16 +173,15 @@ def run_preflight() -> dict:
     else:
         report["warnings"].append("未找到样本 Up/Down 市场，跳过动态费率采样")
 
-    if not paper and lih and not live_lih_dry:
+    if lih and not live_lih_dry:
         report["warnings"].append("LIVE_LIH_DRY_RUN=false — LIH 将发送真实 CLOB 订单")
 
-    if not paper and lih:
+    if lih:
         try:
             from prelive_lih_check import run_prelive_check
 
             prelive = run_prelive_check(require_shadow=live_lih_dry, since_baseline=not live_lih_dry)
             report["prelive_lih"] = prelive
-            # Shadow 模式：prelive 仅作参考，不阻断启动（多盘 btc|5m 会被误报为重复）
             prelive_ok = prelive.get("ok", False) if not live_lih_dry else True
             dup_n = len(prelive.get("duplicate_slots", []))
             check(
@@ -211,8 +199,7 @@ def run_preflight() -> dict:
         except Exception as exc:
             report["warnings"].append(f"prelive_lih_check 跳过: {exc}")
 
-    if not paper:
-        report["warnings"].append("C++ EIP-712 未与 SDK 自动对照；首单请看 live_first_order_checklist")
+    report["warnings"].append("C++ EIP-712 未与 SDK 自动对照；首单请看 live_first_order_checklist")
 
     return report
 
@@ -246,7 +233,7 @@ def print_report(report: dict) -> None:
     fm = report["fee_model"]
     print(f"  .env FEE_RATE (旧扁平): {float(fm['env_FEE_RATE_flat'])*100:.2f}% × 合价")
     print(f"  V2 JSON 含 feeRateBps : {fm['v2_order_json_includes_feeRateBps']}  (不能乱加，会破坏 V2 签名)")
-    print(f"  纸面/信号模拟         : {fm['simulation']}")
+    print(f"  费用模型              : {fm['simulation']}")
     if "sample" in fm:
         s = fm["sample"]
         print(f"  样本市场              : {fm.get('sample_market', '')}")
@@ -284,7 +271,7 @@ def main() -> int:
     PREFLIGHT_PATH.parent.mkdir(parents=True, exist_ok=True)
     PREFLIGHT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print_report(report)
-    if not report["paper_mode"] and not report["ok"]:
+    if not report["ok"]:
         return 1
     return 0
 

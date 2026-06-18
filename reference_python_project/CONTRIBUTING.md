@@ -1,5 +1,7 @@
 # Contributing
 
+> **归档参考** — 本目录非生产代码。生产贡献请参阅仓库根 [README.md](../README.md)。
+
 Pull requests are welcome. This is a live trading bot — correctness and safety matter more than feature velocity.
 
 ---
@@ -21,7 +23,7 @@ pip install -r requirements.txt
 cp .env.example .env             # fill in your credentials
 ```
 
-Always develop against **paper mode** (`PAPER_MODE=true` in `.env`). Never commit credentials or live keys.
+本参考项目自带 simulation 模式；**勿用于生产**。生产栈见根目录 README（`LIVE_LIH_DRY_RUN` shadow / 实盘）。切勿提交真实密钥。
 
 ---
 
@@ -87,7 +89,7 @@ There is no automated test suite. Before submitting a PR, include evidence in th
 - PR title: use conventional commits — `fix:`, `feat:`, `refactor:`, `docs:`, `chore:`
 - Keep `main.py` changes minimal — prefer pushing logic into the relevant subsystem file
 - Never add `# type: ignore` without a comment explaining why
-- Do not change `PAPER_MODE` default or any risk parameter defaults without discussion
+- Do not change risk parameter defaults without discussion
 
 ### Changes that always need a maintainer discussion first
 

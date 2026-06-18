@@ -36,7 +36,6 @@ STRATEGY_SYNC_PREFIXES = (
     "LIH_",
     "DH_ENABLE_",
     "DH_BOOK_",
-    "PAPER_",
     "BINANCE_",
 )
 STRATEGY_SYNC_EXACT = ("MIN_ORDER_SIZE", "FEE_RATE", "LIVE_MIRROR_PATH")
@@ -54,7 +53,6 @@ SERVER_ENV_PROTECT = (
     "POLYMARKET_CLOB_PASSPHRASE",
 )
 SERVER_ENV_FORCE = {
-    "PAPER_MODE": "true",
     "LIVE_LIH_DRY_RUN": "true",
     "LIVE_DH_DRY_RUN": "true",
 }
@@ -165,6 +163,18 @@ def run(client: paramiko.SSHClient, cmd: str, timeout: int = 600) -> int:
 
 def main() -> int:
     mode = sys.argv[1] if len(sys.argv) > 1 else "probe"
+    mode = {
+        "deploy-lih-paper": "deploy-lih-shadow",
+        "server-paper": "server-shadow",
+        "production": "deploy-full",
+    }.get(mode, mode)
+
+    if mode == "deploy-full":
+        import subprocess
+
+        cmd = [sys.executable, str(ROOT / "scripts/deploy_production.py"), *sys.argv[2:]]
+        return subprocess.call(cmd)
+
     pw = load_password()
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -258,16 +268,18 @@ def main() -> int:
                 run(client, step, timeout=300)
             return 0
 
-        if mode == "server-paper":
-            # Revert server to paper only (does NOT touch local .env).
+        if mode == "server-shadow":
+            # Revert server to shadow only (does NOT touch local .env).
             bot_sh = ROOT / "scripts" / "server_start_bot.sh"
             remote_bot = f"{PROJ}/server_start_bot.sh"
             sftp = client.open_sftp()
             sftp.put(str(bot_sh), remote_bot)
             sftp.close()
             steps = [
-                f"sed -i 's/^PAPER_MODE=.*/PAPER_MODE=true/' '{PROJ}/.env'",
-                f"grep -E '^(PAPER_MODE|RISK_MAX)' '{PROJ}/.env' | head -5",
+                f"grep -q '^LIVE_LIH_DRY_RUN=' '{PROJ}/.env' && "
+                f"sed -i 's/^LIVE_LIH_DRY_RUN=.*/LIVE_LIH_DRY_RUN=true/' '{PROJ}/.env' || "
+                f"echo 'LIVE_LIH_DRY_RUN=true' >> '{PROJ}/.env'",
+                f"grep -E '^(RISK_MAX)' '{PROJ}/.env' | head -5",
                 f"chmod +x '{remote_bot}' && bash '{remote_bot}'",
                 "sleep 8",
                 "pgrep -af 'start_bot|trading-core' || true",
@@ -283,8 +295,7 @@ def main() -> int:
 from pathlib import Path
 P = Path("{PROJ}/.env")
 updates = {{
-    "PAPER_MODE": "false",
-    "LIH_ENABLED": "true",
+        "LIH_ENABLED": "true",
     "RISK_MAX_POSITION_FRACTION": "0.20",
     "RISK_MAX_CONCURRENT_POSITIONS": "1",
     "MIN_ORDER_SIZE": "5.0",
@@ -299,7 +310,6 @@ updates = {{
     "DH_ENABLE_15M_ETH": "false",
     "AUTO_REDEEM": "true",
     "LIVE_LIH_DRY_RUN": "true",
-    "PAPER_STATE_PERSIST": "false",
     "LIVE_STARTING_BALANCE": "21.077149",
 }}
 shutil.copy2(P, str(P) + ".pre-live-small.bak")
@@ -329,10 +339,10 @@ print("patched", len(updates), "keys")
                 f.write(patch_py)
             sftp.close()
             steps = [
-                f"test -f '{PROJ}/logs/paper_state.json' && "
-                f"cp '{PROJ}/logs/paper_state.json' '{PROJ}/logs/paper_state.json.pre-live.bak' || true",
+                f"test -f '{PROJ}/logs/live_state.json' && "
+                f"cp '{PROJ}/logs/live_state.json' '{PROJ}/logs/live_state.json.pre-live.bak' || true",
                 f"cd '{PROJ}' && .venv/bin/python _patch_live_small.py",
-                f"grep -E '^(PAPER_MODE|LIH_ENABLED|RISK_|MIN_ORDER|DH_ENABLE|AUTO_REDEEM)' '{PROJ}/.env'",
+                f"grep -E '^(LIH_ENABLED|RISK_|MIN_ORDER|DH_ENABLE|AUTO_REDEEM)' '{PROJ}/.env'",
                 f"cd '{PROJ}' && .venv/bin/python derive_and_update_keys.py",
                 f"grep -E '^POLY_API' '{PROJ}/.env' | sed "
                 "'s/POLY_API_SECRET=.*/POLY_API_SECRET=***MASKED***/;"
@@ -367,7 +377,7 @@ print("patched", len(updates), "keys")
                 f"grep -q '^LIVE_DH_DRY_RUN=' '{PROJ}/.env' && "
                 f"sed -i 's/^LIVE_DH_DRY_RUN=.*/LIVE_DH_DRY_RUN=true/' '{PROJ}/.env' || "
                 f"echo 'LIVE_DH_DRY_RUN=true' >> '{PROJ}/.env'",
-                f"grep -E '^(PAPER_MODE|LIVE_DH_DRY_RUN|RISK_MAX)' '{PROJ}/.env' | head -6",
+                f"grep -E '^(LIVE_DH_DRY_RUN|RISK_MAX)' '{PROJ}/.env' | head -6",
                 BUILD_VPS,
                 f"chmod +x '{remote_bot}' && bash '{remote_bot}'",
                 "sleep 10",
@@ -423,7 +433,7 @@ print("patched", len(updates), "keys")
             steps = [
                 f"cp '{PROJ}/build/trading-core' '{PROJ}/build/trading-core.bak-$(date +%s)' 2>/dev/null || true",
                 env_patch,
-                f"grep -E '^(PAPER_MODE|LIVE_DH_DRY_RUN|DH_BOOK_AWARE_DETECT)' '{PROJ}/.env' | head -6",
+                f"grep -E '^(LIVE_DH_DRY_RUN|DH_BOOK_AWARE_DETECT)' '{PROJ}/.env' | head -6",
                 BUILD_VPS,
                 f"chmod +x '{remote_bot}' && bash '{remote_bot}'",
                 "sleep 10",
@@ -437,8 +447,8 @@ print("patched", len(updates), "keys")
                     return r
             return rc
 
-        if mode in ("shadow-lih-upload", "shadow-lih", "deploy-lih-paper"):
-            # Upload LIH-primary stack — paper on server until operator sets PAPER_MODE=false.
+        if mode in ("shadow-lih-upload", "shadow-lih", "deploy-lih-shadow"):
+            # Upload LIH-primary stack.
             upload_files = [
                 "trading-core/CMakeLists.txt",
                 "trading-core/conanfile.txt",
@@ -464,7 +474,7 @@ print("patched", len(updates), "keys")
                 "requirements.txt",
             ]
             upload_dirs: list[tuple[str, str]] = []
-            if mode == "deploy-lih-paper":
+            if mode == "deploy-lih-shadow":
                 upload_dirs = [
                     ("frontend/src", f"{PROJ}/frontend/src"),
                 ]
@@ -479,7 +489,7 @@ print("patched", len(updates), "keys")
             sftp.put(str(bot_sh), remote_bot)
             for local_rel, remote_dir in upload_dirs:
                 sftp_put_tree(sftp, ROOT / local_rel, remote_dir)
-            if mode == "deploy-lih-paper":
+            if mode == "deploy-lih-shadow":
                 web_sh = ROOT / "scripts" / "server_start_web.sh"
                 restart_sh = ROOT / "scripts" / "server_restart_web.sh"
                 sftp.put(str(web_sh), f"{PROJ}/server_start_web.sh")
@@ -487,8 +497,7 @@ print("patched", len(updates), "keys")
             sftp.close()
             env_keys = {
                 "LIH_ENABLED": "true",
-                "PAPER_MODE": "true",
-                "LIVE_LIH_DRY_RUN": "true",
+                                "LIVE_LIH_DRY_RUN": "true",
                 "LIVE_DH_DRY_RUN": "true",
             }
             env_patch_lines = []
@@ -502,16 +511,16 @@ print("patched", len(updates), "keys")
             steps = [
                 f"cp '{PROJ}/build/trading-core' '{PROJ}/build/trading-core.bak-$(date +%s)' 2>/dev/null || true",
                 env_patch,
-                f"grep -E '^(PAPER_MODE|LIH_ENABLED|LIVE_LIH|LIVE_DH|RISK_MAX)' '{PROJ}/.env' | head -10",
+                f"grep -E '^(LIH_ENABLED|LIVE_LIH|LIVE_DH|RISK_MAX)' '{PROJ}/.env' | head -10",
                 f"cd '{PROJ}' && .venv/bin/pip install -q -r requirements.txt",
                 BUILD_VPS,
                 f"chmod +x '{remote_bot}' && bash '{remote_bot}'",
                 "sleep 10",
                 "pgrep -af 'start_bot|trading-core' || true",
-                f"grep -E 'LIH|Leg-In|leg_in|PAPER|LIH dry-run' '{PROJ}/logs/bridge.log' 2>/dev/null | tail -20 || "
+                f"grep -E 'LIH|Leg-In|leg_in|LIH dry-run|SHADOW' '{PROJ}/logs/bridge.log' 2>/dev/null | tail -20 || "
                 f"tail -20 '{PROJ}/logs/bridge.log' 2>/dev/null || true",
             ]
-            if mode == "deploy-lih-paper":
+            if mode == "deploy-lih-shadow":
                 steps.extend([
                     f"export NEXTAUTH_URL=http://{HOST}:3001 && "
                     f"chmod +x '{PROJ}/server_start_web.sh' && bash '{PROJ}/server_start_web.sh'",
@@ -553,7 +562,7 @@ print("patched", len(updates), "keys")
             run(client, f"chmod +x '{remote_bot}' && bash '{remote_bot}'", timeout=120)
             run(
                 client,
-                f"grep -E '^(PAPER_MODE|LIH_ENABLED|LIH_|DH_SUM|RISK_)' '{remote_env}' | head -12",
+                f"grep -E '^(LIH_ENABLED|LIH_|DH_SUM|RISK_)' '{remote_env}' | head -12",
                 timeout=30,
             )
             run(client, "pgrep -af 'start_bot|trading-core' || true", timeout=15)
@@ -575,7 +584,7 @@ print("patched", len(updates), "keys")
                 run(client, step, timeout=30)
             run(
                 client,
-                f"grep -E '^(PAPER_MODE|LIH_|RISK_MAX|PAPER_REALISM|LIVE_LIH)' '{remote_env}' | head -20",
+                f"grep -E '^(LIH_|RISK_MAX|LIVE_LIH)' '{remote_env}' | head -20",
                 timeout=30,
             )
             run(client, f"chmod +x '{remote_bot}' && bash '{remote_bot}'", timeout=120)
@@ -800,7 +809,7 @@ print("patched", len(updates), "keys")
             )
             steps = [
                 env_patch,
-                f"grep -E '^(PAPER_MODE|HTTP_BIND|DH_ENABLE_15M|BOT_API_TOKEN|LIVE_LIH)' '{PROJ}/.env' | head -8",
+                f"grep -E '^(HTTP_BIND|DH_ENABLE_15M|BOT_API_TOKEN|LIVE_LIH)' '{PROJ}/.env' | head -8",
                 BUILD_VPS,
                 f"chmod +x '{PROJ}/server_start_bot.sh' && bash '{PROJ}/server_start_bot.sh'",
                 "sleep 8",
@@ -818,7 +827,7 @@ print("patched", len(updates), "keys")
             return 0
 
         if mode == "step1-shadow":
-            # Step 1 go-live: PAPER_MODE=false + LIVE_LIH_DRY_RUN=true (shadow only, no real orders).
+            # Step 1 go-live: shadow only (LIVE_LIH_DRY_RUN=true).
             sftp = client.open_sftp()
             for rel in ("polymarket_fees.py", "live_preflight.py"):
                 print(f"Upload {rel} -> {PROJ}/{rel}", file=sys.stderr)
@@ -827,14 +836,13 @@ print("patched", len(updates), "keys")
             sftp.put(str(bot_sh), f"{PROJ}/server_start_bot.sh")
             sftp.close()
             env_patch = (
-                f"sed -i 's/^PAPER_MODE=.*/PAPER_MODE=false/' '{PROJ}/.env'; "
                 f"grep -q '^LIVE_LIH_DRY_RUN=' '{PROJ}/.env' && "
                 f"sed -i 's/^LIVE_LIH_DRY_RUN=.*/LIVE_LIH_DRY_RUN=true/' '{PROJ}/.env' || "
                 f"echo 'LIVE_LIH_DRY_RUN=true' >> '{PROJ}/.env'"
             )
             steps = [
                 env_patch,
-                f"grep -E '^(PAPER_MODE|LIVE_LIH_DRY_RUN|LIH_ENABLED|RISK_MAX|POLYMARKET_FUNDER)' '{PROJ}/.env'",
+                f"grep -E '^(LIVE_LIH_DRY_RUN|LIH_ENABLED|RISK_MAX|POLYMARKET_FUNDER)' '{PROJ}/.env'",
                 f"cd '{PROJ}' && .venv/bin/python fetch_balance.py",
                 f"cd '{PROJ}' && .venv/bin/python start_bot.py --preflight-only",
                 f"chmod +x '{PROJ}/server_start_bot.sh' && bash '{PROJ}/server_start_bot.sh'",
@@ -884,7 +892,6 @@ print("patched", len(updates), "keys")
                 sftp.put(str(ROOT / rel), f"{PROJ}/{rel}")
             sftp.close()
             env_patch = (
-                f"sed -i 's/^PAPER_MODE=.*/PAPER_MODE=false/' '{PROJ}/.env'; "
                 f"grep -q '^LIVE_LIH_DRY_RUN=' '{PROJ}/.env' && "
                 f"sed -i 's/^LIVE_LIH_DRY_RUN=.*/LIVE_LIH_DRY_RUN=false/' '{PROJ}/.env' || "
                 f"echo 'LIVE_LIH_DRY_RUN=false' >> '{PROJ}/.env'; "
@@ -895,7 +902,7 @@ print("patched", len(updates), "keys")
             )
             steps = [
                 env_patch,
-                f"grep -E '^(PAPER_MODE|LIVE_LIH_DRY_RUN|LIH_ENABLED|LIH_MAX_USDC|RISK_MAX|LIVE_TRADES_BASELINE)' '{PROJ}/.env'",
+                f"grep -E '^(LIVE_LIH_DRY_RUN|LIH_ENABLED|LIH_MAX_USDC|RISK_MAX|LIVE_TRADES_BASELINE)' '{PROJ}/.env'",
                 f"cd '{PROJ}' && .venv/bin/python fetch_balance.py",
                 f"cd '{PROJ}' && .venv/bin/python prelive_lih_check.py --allow-live --since-baseline",
                 f"cd '{PROJ}' && .venv/bin/python start_bot.py --preflight-only",
@@ -1246,7 +1253,7 @@ print("patched", len(updates), "keys")
             )
             steps = [
                 env_patch,
-                f"grep -E '^(PAPER_MODE|LIVE_LIH|BOT_API_TOKEN|LIVE_STATE)' '{PROJ}/.env' | head -10",
+                f"grep -E '^(LIVE_LIH|BOT_API_TOKEN|LIVE_STATE)' '{PROJ}/.env' | head -10",
                 f"grep BOT_API_TOKEN '{PROJ}/web.env' 2>/dev/null | head -1 || echo 'web.env: no BOT_API_TOKEN yet'",
                 BUILD_VPS,
                 f"chmod +x '{PROJ}/server_start_bot.sh' && bash '{PROJ}/server_start_bot.sh'",
@@ -1350,7 +1357,7 @@ print("patched", len(updates), "keys")
                 f"cd '{PROJ}' && .venv/bin/python -c "
                 "\"from bot_config import clear_live_trades_history; "
                 "print('cleared', clear_live_trades_history())\"",
-                f"grep -E '^(LIVE_TRADES_BASELINE_TS|LIVE_LIH_DRY_RUN|PAPER_MODE)' '{PROJ}/.env'",
+                f"grep -E '^(LIVE_TRADES_BASELINE_TS|LIVE_LIH_DRY_RUN)' '{PROJ}/.env'",
                 f"ls -la '{PROJ}/logs/live_state.json' 2>/dev/null || echo 'live_state removed'",
                 f"ls -la '{PROJ}/logs/live_state.json.bak.*' 2>/dev/null | tail -1 || true",
                 f"bash '{PROJ}/server_start_bot.sh'",
@@ -1518,7 +1525,7 @@ print("patched", len(updates), "keys")
             )
             steps = [
                 env_patch,
-                f"grep -E '^(PAPER_MODE|LIVE_LIH|LIH_MAX_USDC|PRELIVE_LOG|LIH_LEG1_COOLDOWN|RISK_MAX)' '{PROJ}/.env' | head -12",
+                f"grep -E '^(LIVE_LIH|LIH_MAX_USDC|PRELIVE_LOG|LIH_LEG1_COOLDOWN|RISK_MAX)' '{PROJ}/.env' | head -12",
                 BUILD_VPS,
                 f"bash '{PROJ}/server_start_bot.sh'",
                 "sleep 12",
@@ -1656,7 +1663,7 @@ print("patched", len(updates), "keys")
                 f"test -x '{PROJ}/build/trading-core' && ls -la '{PROJ}/build/trading-core'",
                 "pgrep -af 'trading-core|start_bot' || echo BOT_NOT_RUNNING_OK",
                 f"test -f '{PROJ}/logs/STOP_TRADING' && echo STOP_FLAG=present || echo STOP_FLAG=missing",
-                f"grep -E '^PAPER_MODE=|^LIH_ENABLED=|^LIH_ONE_SLOT|^RISK_MAX_CONCURRENT' '{PROJ}/.env'",
+                f"grep -E '^LIH_ENABLED=|^LIH_ONE_SLOT|^RISK_MAX_CONCURRENT' '{PROJ}/.env'",
             ]
             for step in steps:
                 r = run(client, step, timeout=1800)

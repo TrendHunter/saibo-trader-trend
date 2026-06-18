@@ -1,5 +1,7 @@
 # INSTALLATION GUIDE
 
+> **归档参考** — 本目录非 C++ LIH 生产栈。生产部署见 [../README.md](../README.md)。
+
 > Setup instructions for the Polymarket Arbitrage Bot on Linux, Windows, and Docker.
 > For strategy explanations and configuration reference, see [README.md](README.md).
 

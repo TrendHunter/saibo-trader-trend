@@ -23,7 +23,7 @@ def main() -> int:
     log = f"{PROJ}/logs/bridge.log"
     try:
         sections = [
-            ("ENV", f"grep -E '^(PAPER_MODE|LIVE_LIH_DRY_RUN|LIH_ENABLED|START_SKIP)' '{PROJ}/.env'"),
+            ("ENV", f"grep -E '^(LIVE_LIH_DRY_RUN|LIH_ENABLED|START_SKIP)' '{PROJ}/.env'"),
             (
                 "KEY (.env)",
                 f"grep 'POLYMARKET_PRIVATE_KEY' '{PROJ}/.env' | sed 's/=.*/=***REDACTED***/' | head -1",
@@ -63,7 +63,7 @@ def main() -> int:
             if title == "PROCESSES" and "trading-core" not in out:
                 ok = False
             if title == "ENV":
-                if "PAPER_MODE=false" not in out or "LIVE_LIH_DRY_RUN=true" not in out:
+                if "LIVE_LIH_DRY_RUN=true" not in out or "LIVE_LIH_DRY_RUN=true" not in out:
                     ok = False
             if title == "STOP_TRADING" and out.strip() == "yes":
                 ok = False

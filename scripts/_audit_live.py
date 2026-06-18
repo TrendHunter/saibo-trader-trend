@@ -36,7 +36,7 @@ def main() -> int:
         print("=" * 60)
 
         steps = [
-            ("模式 .env", f"grep -E '^(PAPER_MODE|LIVE_LIH_DRY_RUN|LIH_ENABLED|LIH_MAX_USDC|RISK_MAX|LIVE_TRADES_BASELINE|PRELIVE)' '{PROJ}/.env'"),
+            ("模式 .env", f"grep -E '^(LIVE_LIH_DRY_RUN|LIH_ENABLED|LIH_MAX_USDC|RISK_MAX|LIVE_TRADES_BASELINE|PRELIVE)' '{PROJ}/.env'"),
             ("进程", f"pgrep -af 'trading-core|start_bot' | head -5"),
             ("余额", f"cd '{PROJ}' && .venv/bin/python fetch_balance.py 2>/dev/null | tail -3"),
             ("实盘成交", f"grep -E 'LIH LIVE|LIH\\] LEG1|Bridge fill|register_lih|LEG1 buy failed|size_matched' '{PROJ}/bot.log' 2>/dev/null | grep '2026-06-16 05:0' | tail -30 || echo none"),

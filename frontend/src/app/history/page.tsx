@@ -61,10 +61,6 @@ export default function HistoryPage() {
   const closedRoundCount = cumulativeClosedTrades(liveState);
 
   useEffect(() => {
-    if (liveState.isPaperMode) {
-      setClobFills([]);
-      return;
-    }
     let cancelled = false;
     (async () => {
       try {
@@ -89,7 +85,7 @@ export default function HistoryPage() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [liveState.isPaperMode]);
+  }, [liveState.liveLihDryRun]);
 
   const tradeHistory = useMemo(
     () => mergeTradeHistory(liveState.tradeHistory, clobFills, liveState.tradesBaselineTs ?? 0),
@@ -122,12 +118,12 @@ export default function HistoryPage() {
           icon={History}
         />
 
-        {liveState.isPaperMode && (
+        {liveState.liveLihDryRun !== false && (
           <div className="mb-4 rounded-lg border border-amber-500/25 bg-amber-500/8 px-4 py-2.5 text-[13px] text-amber-100/90">
-            当前为<strong>纸面模式</strong>。记录写入本地状态文件，重启 bot 后保留。
+            当前为<strong>Shadow 模式</strong>（LIVE_LIH_DRY_RUN=true），不向 CLOB 发单；本地状态仍会记录验簿轮次。
           </div>
         )}
-        {!liveState.isPaperMode && liveState.tradesBaselineTs && liveState.tradesBaselineTs > 0 && (
+        {liveState.liveLihDryRun === false && liveState.tradesBaselineTs && liveState.tradesBaselineTs > 0 && (
           <div className="mb-4 rounded-lg border border-emerald-500/25 bg-emerald-500/8 px-4 py-2.5 text-[13px] text-emerald-100/90">
             实盘统计已从{" "}
             <strong>
@@ -136,7 +132,7 @@ export default function HistoryPage() {
             起重新计数，此前误触发的成交不会计入。
           </div>
         )}
-        {!liveState.isPaperMode && clobFills.length > 0 && liveState.tradeHistory.length === 0 && !liveState.tradesBaselineTs && (
+        {liveState.liveLihDryRun === false && clobFills.length > 0 && liveState.tradeHistory.length === 0 && !liveState.tradesBaselineTs && (
           <div className="mb-4 rounded-lg border border-sky-500/25 bg-sky-500/8 px-4 py-2.5 text-[13px] text-sky-100/90">
             已从 Polymarket 链上成交同步 <strong>{clobFills.length}</strong> 笔记录（bot 内存状态为空时自动补全）。
           </div>

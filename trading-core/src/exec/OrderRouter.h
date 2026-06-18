@@ -67,7 +67,7 @@ public:
 
     ~OrderRouter();
 
-    /** Live LIH execution (book-aware). Returns false on validation failure. No-op in paper mode. */
+    /** Live LIH execution (book-aware). Returns false on validation failure. No-op when LIVE_LIH_DRY_RUN. */
     bool submit_lih_action(const trading::LegInAction& act, double now_sec);
 
     /** Re-resolve pending CLOB fills and register when confirmed. No-op in paper/shadow. */

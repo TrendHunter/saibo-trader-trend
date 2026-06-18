@@ -1,6 +1,6 @@
 # 实盘 LIH 下单逻辑
 
-本文档整理当前代码库中 **实盘（`PAPER_MODE=false`）LIH 分腿对冲** 从信号到成交的完整链路。主控在 `trading-core/src/main.cpp`，下单执行在 `OrderRouter::submit_lih_action`。
+本文档整理当前代码库中 **实盘 LIH 分腿对冲**（`LIVE_LIH_DRY_RUN=false`）从信号到成交的完整链路。主控在 `trading-core/src/main.cpp`，下单执行在 `OrderRouter::submit_lih_action`。
 
 ---
 
@@ -66,7 +66,7 @@ flowchart TB
     REG --> WS_OUT
 ```
 
-**与纸面的分界**：`main.cpp` 中 `paper_mode == false` 时，`execute_lih_action` 只调用 `router.submit_lih_action`，不走纸面滑点/深度模拟分支。
+**执行路径**：`main.cpp` 中 `execute_lih_action` 调用 `router.submit_lih_action` 走 CLOB 实盘链路。
 
 ---
 
@@ -74,7 +74,7 @@ flowchart TB
 
 | 条件 | 环境变量 / 代码 | 说明 |
 |------|-----------------|------|
-| 实盘模式 | `PAPER_MODE=false` | 否则全部走纸面 `execute_lih_action` 分支 |
+| 实盘模式 | `LIVE_LIH_DRY_RUN=false` | shadow 时只打日志不下单 |
 | LIH 策略 | `LIH_ENABLED=true` | 关闭则不走 LIH 检测 |
 | 真下单 | `LIVE_LIH_DRY_RUN=false` | `true` 时只 shadow：登记持仓、打日志，**不发 CLOB 单** |
 | Python CLOB | `USE_PYTHON_CLOB=true`（默认） | C++ 走本地 bridge，不直接 POST `clob.polymarket.com` |
@@ -82,7 +82,7 @@ flowchart TB
 | 交易允许 | `RiskManager::is_trading_allowed()` | `ACTIVE` 才可开新 leg1；暂停时已有持仓可对冲 |
 | 凭证 | `POLYMARKET_PRIVATE_KEY`、`POLYMARKET_FUNDER` 等 | 启动时校验，缺失则 `main` 退出 |
 
-`OrderRouter` 构造时：`live_lih_dry_run_ = live_lih_dry_run && !paper_mode`（纸面强制 shadow 语义无效）。
+`OrderRouter` 构造时：`live_lih_dry_run_` 由 `LIVE_LIH_DRY_RUN` 控制 shadow 行为。
 
 ---
 
@@ -90,7 +90,7 @@ flowchart TB
 
 主循环约 **250ms** 一轮：
 
-1. **REST 订单簿刷新**（若 `DH_BOOK_AWARE_DETECT` 或纸面 `PAPER_OFFICIAL_BOOK`）：`router.refresh_rest_book(tokens)` → 写入 `StateStore.rest_book_asks_`
+1. **REST 订单簿刷新**（若 `DH_BOOK_AWARE_DETECT`）：`router.refresh_rest_book(tokens)` → 写入 `StateStore.rest_book_asks_`
 2. **市场列表刷新**（60s）：`GammaClient::fetch_updown_markets` → 更新 token 列表 → `poly_feed->subscribe(tokens)`
 3. **LIH 评估**：`try_lih_evaluate()` → `lih_detector->evaluate(now_ms, risk_manager)`
 4. **有动作则执行**：`router.submit_lih_action(act, now_sec)`；成功则 `save_live_lih_state`
@@ -98,7 +98,7 @@ flowchart TB
 
 **Polymarket WS tick** 也会触发 `try_lih_evaluate()`（`poly_feed->set_tick_callback`），因此检测频率高于 250ms。
 
-实盘 **不** 调用 `store.reload_live_mirror()`（仅纸面每轮读 `live_mirror.json`）。
+实盘 **不** 调用 `store.reload_live_mirror()`。
 
 ---
 
@@ -109,7 +109,7 @@ flowchart TB
 优先级（与执行价分离）：
 
 1. `book_aware_detect` → `get_detection_ask`（WS + REST 取保守 ask）
-2. `paper_official_book` → **仅纸面**
+2. `rest_book_asks_` — REST 订单簿缓存
 3. `LIH_USE_MIRROR` → `get_mirror_quote`（读 `live_mirror.json` 缓存）
 4. 兜底 → `get_token_price`（WS `price_change`）
 
@@ -156,7 +156,7 @@ flowchart TB
 
 ## 6. 执行入口 `OrderRouter::submit_lih_action`
 
-`paper_mode_` 时直接 `return false`（实盘专用）。
+`live_lih_dry_run_` 为 true 时 shadow，不 POST 订单。
 
 ### 6.1 通用执行前步骤
 
@@ -298,7 +298,7 @@ Web 持仓来自 **C++ 内存**经 WS 推送；若 fill 未登记则链上有仓
 
 | 变量 | 默认 | 作用 |
 |------|------|------|
-| `PAPER_MODE` | true | false 才走本文档链路 |
+| `LIVE_LIH_DRY_RUN` | true | false 才 POST 真实订单 |
 | `LIVE_LIH_DRY_RUN` | true | true=shadow 不下真单 |
 | `USE_PYTHON_CLOB` | true | C++→Python bridge |
 | `LIH_LEG1_MAX_PRICE` | 0.45 | leg1 最高价 |
@@ -317,7 +317,7 @@ Web 持仓来自 **C++ 内存**经 WS 推送；若 fill 未登记则链上有仓
 
 | 文件 | 职责 |
 |------|------|
-| `trading-core/src/main.cpp` | 主循环、实盘/纸面分叉、`try_lih_evaluate` |
+| `trading-core/src/main.cpp` | 主循环、`try_lih_evaluate`、LIH 执行 |
 | `trading-core/src/signals/LegInHedgeDetector.cpp` | 信号与检测价 |
 | `trading-core/src/exec/OrderRouter.cpp` | 实盘执行、bridge、REST 簿 |
 | `trading-core/src/risk/RiskManager.cpp` | 风控、inflight、持仓 |

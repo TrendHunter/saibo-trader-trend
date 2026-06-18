@@ -4,7 +4,7 @@
 
 ## 为什么归档 DH
 
-- DH 逻辑在纸面/回测上已成熟（双边折价同时开仓）
+- DH 逻辑在回测/历史环境已验证（双边折价同时开仓）
 - 实盘中与 HFT / 做市商抢同一笔合价单，**很难成交**，策略无法发挥
 - LIH 改为「先买便宜腿、再 rebalance」，更适合当前竞争环境
 
@@ -43,4 +43,4 @@ git tag -a dh-only-legacy -m "DH-only before LIH primary"
 ## 部署建议
 
 - **新服务器 / 新上传**：使用主仓库默认配置（LIH）
-- **仅复现 DH 纸面实验**：使用本目录 `.env.dh-only.example`
+- **仅复现 DH-only 实验**：使用本目录 `.env.dh-only.example`（legacy 配置，非 LIH 生产路径）

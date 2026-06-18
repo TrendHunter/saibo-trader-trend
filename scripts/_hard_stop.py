@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hard stop: kill bot + build, paper env, pause persisted — NO restart, NO compile."""
+"""Hard stop: kill bot + build, shadow env, pause persisted — NO restart, NO compile."""
 from __future__ import annotations
 
 import json
@@ -32,7 +32,6 @@ def main() -> int:
     run(f"touch '{PROJ}/logs/STOP_TRADING'")
 
     env_updates = {
-        "PAPER_MODE": "true",
         "LIVE_LIH_DRY_RUN": "true",
         "RISK_MAX_CONCURRENT_POSITIONS": "0",
         "LIH_ENABLED": "false",
@@ -75,7 +74,7 @@ def main() -> int:
     print(run("pgrep -af 'build|ninja|trading-core|start_bot|cc1plus' || echo ALL_STOPPED"))
 
     print("=== env ===")
-    print(run(f"grep -E '^PAPER_MODE=|^LIVE_LIH|^RISK_MAX_CONCURRENT|^LIH_ENABLED=' '{PROJ}/.env'"))
+    print(run(f"grep -E '^LIVE_LIH|^RISK_MAX_CONCURRENT|^LIH_ENABLED=' '{PROJ}/.env'"))
 
     print("=== runtime_config ===")
     print(run(f"cat '{PROJ}/logs/runtime_config.json' 2>/dev/null || echo missing"))
@@ -87,7 +86,7 @@ def main() -> int:
     print(run(f"tail -30 '{PROJ}/logs/bridge.log' 2>/dev/null || echo no bridge log"))
 
     c.close()
-    print("\n已硬停：进程已杀、LIH 已关、纸面模式、未编译、未启动。")
+    print("\n已硬停：进程已杀、LIH 已关、shadow 模式、未编译、未启动。")
     return 0
 
 

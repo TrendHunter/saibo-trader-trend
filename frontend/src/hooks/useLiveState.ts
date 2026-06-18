@@ -84,6 +84,7 @@ export interface LiveState {
   totalLihTrades: number;
   status: number;
   statusReason: string;
+  /** @deprecated Always false in live-only builds; use liveLihDryRun for shadow vs real orders */
   isPaperMode: boolean;
   feeRate: number;
   feeModel: string;
@@ -129,7 +130,7 @@ export interface LiveState {
   botStreamConnected: boolean;
   cashBalance?: number;
   positionsValue?: number;
-  /** On-chain wallet total from fetch_balance.py (independent of paper sim balance) */
+  /** On-chain wallet total from fetch_balance.py */
   realWalletBalance?: number;
   walletSource?: string;
 }
@@ -149,7 +150,7 @@ const defaultState: LiveState = {
   totalLihTrades: 0,
   status: 0,
   statusReason: "",
-  isPaperMode: true,
+  isPaperMode: false,
   feeRate: 0.018,
   feeModel: "polymarket_v2_curve",
   useDynamicFees: false,
@@ -385,7 +386,7 @@ function normalizeLiveState(raw: Record<string, unknown>): LiveState {
     totalLihTrades: toNumber(raw.totalLihTrades),
     status: toNumber(raw.status),
     statusReason: String(raw.statusReason ?? ""),
-    isPaperMode: raw.isPaperMode !== false,
+    isPaperMode: false,
     feeRate,
     feeModel: String(raw.feeModel ?? "polymarket_v2_curve"),
     useDynamicFees: raw.useDynamicFees === true,
@@ -407,7 +408,7 @@ function normalizeLiveState(raw: Record<string, unknown>): LiveState {
     lihLeg1MaxPrice: toNumber(raw.lihLeg1MaxPrice, 0.45) || 0.45,
     lihTargetCombined: toNumber(raw.lihTargetCombined, 0.94) || 0.94,
     lihUseMirror: raw.lihUseMirror !== false,
-    liveLihDryRun: raw.isPaperMode === false ? raw.liveLihDryRun !== false : undefined,
+    liveLihDryRun: raw.liveLihDryRun !== false,
     tradesBaselineTs: toNumber(raw.tradesBaselineTs, 0) || undefined,
     mirrorAssetCount: toNumber(raw.mirrorAssetCount, 0) || 0,
     riskMaxPositionFraction: toNumber(raw.riskMaxPositionFraction, 0.08) || 0.08,

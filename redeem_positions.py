@@ -129,10 +129,6 @@ def redeem_positions(condition_id: str, *, neg_risk: bool = True) -> dict:
     if not cid:
         return {"success": False, "tx_hash": None, "message": "condition_id required"}
 
-    paper = os.getenv("PAPER_MODE", "false").strip().lower()
-    if paper in ("true", "1", "yes"):
-        return {"success": True, "tx_hash": None, "message": "Paper mode — skipped"}
-
     pk = _strip_env(os.getenv("POLYMARKET_PRIVATE_KEY", ""))
     if not pk:
         return {"success": False, "tx_hash": None, "message": "POLYMARKET_PRIVATE_KEY missing"}

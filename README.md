@@ -5,7 +5,7 @@ Polymarket **5m / 15m Up-Down** 市场（BTC / ETH / SOL）自动交易。主策
 [![C++](https://img.shields.io/badge/C++-20-blue)](https://isocpp.org)
 [![Polygon](https://img.shields.io/badge/Network-Polygon-purple)](https://polygon.technology)
 
-> 遗留 **Dump Hedge** 已归档：[`archive/dh-only/`](archive/dh-only/)（设 `LIH_ENABLED=false` 可恢复 DH-only）。**纸面模式已移除**，仅保留 `LIVE_LIH_DRY_RUN` 做 shadow 验证。
+> 遗留 **Dump Hedge** 已归档：[`archive/dh-only/`](archive/dh-only/)（设 `LIH_ENABLED=false` 可恢复 DH-only）。
 
 ---
 
@@ -26,7 +26,7 @@ Polymarket **5m / 15m Up-Down** 市场（BTC / ETH / SOL）自动交易。主策
 
 ### Leg1 / 对冲锁（不留尾巴）
 
-`RiskManager` 维护 leg1 in-flight 与 rebalance 锁。Round 结束或异常路径主动释放；**`scrub_lih_inflight_locks`** 在主循环与 `LegInHedgeDetector::evaluate` 入口周期性清理（120s TTL），避免上一局结束后卡死下一窗口。
+`RiskManager` 维护 leg1 in-flight 与 rebalance 锁。Round 结束或异常路径主动释放；**`scrub_lih_inflight_locks`** 周期性清理（120s TTL），避免上一局结束后卡死下一窗口。
 
 ---
 
@@ -37,7 +37,7 @@ Polymarket **5m / 15m Up-Down** 市场（BTC / ETH / SOL）自动交易。主策
 | **交易核心** | C++20 · CMake · Conan · Boost · spdlog · OpenSSL | 行情、LIH 检测、风控、下单编排 |
 | **Python 桥接** | asyncio · py-clob-client | `dashboard_bridge.py` WS + HTTP API、`clob_live.py` 实盘下单、reconcile / redeem |
 | **Web 仪表盘** | Next.js 16 · Prisma/SQLite · NextAuth | 实时持仓/余额、暂停恢复、风控参数、历史 |
-| **部署** | VPS 裸跑 · Docker · `remote_deploy.py` | 当前生产为 VPS 裸跑（见下） |
+| **部署** | VPS 裸跑 · Docker · `remote_deploy.py` | 当前生产为 VPS 裸跑 |
 
 **设计原则**：C++ 核心与 bot HTTP API（`:8081`）仅监听本机；公网只暴露 Next.js（`:3001`）。
 
@@ -64,19 +64,18 @@ trading-core (C++)
 
 | 模式 | 配置 | 说明 |
 |------|------|------|
-| **实盘 LIVE** | `PAPER_MODE=false`（默认） | 真实 CLOB 下单 |
-| **Shadow** | `LIVE_LIH_DRY_RUN=true` | 只打日志、不下单，验证信号 |
-| ~~纸面~~ | ~~`PAPER_MODE=true`~~ | **已移除**；C++ 读到 `true` 会 warn 并忽略 |
+| **实盘 LIVE** | `LIVE_LIH_DRY_RUN=false` | 真实 CLOB 下单（默认） |
+| **Shadow** | `LIVE_LIH_DRY_RUN=true` | 只验簿、打日志，不下单 |
 
-钱包与策略在根目录 **`.env`**；Web 登录与公网 URL 在 **`web.env`**（见 [`web.env.example`](web.env.example)）。
+钱包与策略在 **`.env`**；Web 登录在 **`web.env`**（见 [`web.env.example`](web.env.example)）。
 
 ---
 
 ## VPS 裸跑部署（当前生产，与服务器一致）
 
-默认路径 **`/opt/polymarket-bot`**。Bot 与 Web **分开启动**，Web 用 `web.env` + 启动脚本（低内存 VPS 友好）。
+默认路径 **`/opt/polymarket-bot`**。
 
-### 1. 首次安装 Bot
+### 1. Bot
 
 ```bash
 cd /opt/polymarket-bot
@@ -84,67 +83,63 @@ git pull
 cp .env.example .env          # 填 POLYMARKET_PRIVATE_KEY / FUNDER / SIGNER
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python3 derive_and_update_keys.py   # 写入 POLY_API_* 到 .env
-
-# ~1GB 内存 VPS 用低内存编译
+python3 derive_and_update_keys.py
 bash build-lowmem.sh
-
-# 后台启动 bot（bridge + trading-core）
 bash server_start_bot.sh
-# 日志: logs/bridge.log  logs/bot.log
 ```
 
-`.env` 关键项：`LIH_ENABLED=true`、`LIVE_LIH_DRY_RUN=false`、`AUTO_REDEEM=true`、`HTTP_BIND=127.0.0.1`。
-
-改 C++ 后必须 **重新 `build-lowmem.sh` 并 `server_start_bot.sh`** 才生效。
-
-### 2. 首次安装 Web 仪表盘
+### 2. Web 仪表盘
 
 ```bash
-cd /opt/polymarket-bot
 cp web.env.example web.env
-# 编辑 AUTH_USERNAME / AUTH_PASSWORD / NEXTAUTH_URL=http://<公网IP>:3001
-
-bash server_start_web.sh
-# 内部: npm ci → prisma → npm run build → scripts/web_run.sh → web watchdog cron
-# 日志: logs/frontend.log
+# AUTH_USERNAME / AUTH_PASSWORD / NEXTAUTH_URL=http://<公网IP>:3001
+bash server_start_web.sh       # 首次或改 frontend 后
+bash server_restart_web.sh       # 日常快速重启
 ```
-
-| 脚本 | 用途 |
-|------|------|
-| `server_start_web.sh` | **全量**：依赖安装 + build + 启动（改 frontend 代码后跑这个） |
-| `server_restart_web.sh` | **快速重启**：不 npm ci / 不 build（日常或 watchdog 用） |
-| `scripts/web_run.sh` | 启动 Next（优先 standalone，192MB heap） |
-| `scripts/web_watchdog.sh` | cron 每 3 分钟检查端口，挂了就 `server_restart_web.sh` |
-
-浏览器：`http://<服务器IP>:3001`（凭 `web.env` 里的账号密码）。
-
-### 3. 端口与安全
 
 | 端口 | 服务 | 暴露 |
 |------|------|------|
-| 8080 | Bot WebSocket | **仅 127.0.0.1** |
-| 8081 | Bot HTTP API | **仅 127.0.0.1** |
-| 3001 | Next.js Web | 可对公网（建议 HTTPS + 强密码） |
+| 8080 / 8081 | Bot WS / API | 仅 127.0.0.1 |
+| 3001 | Next.js | 公网（建议 HTTPS） |
 
-防火墙：放行 `3001`，**不要**把 8080/8081 暴露到公网。
+### 3. 一键部署（推荐）
 
-### 4. 从本地 Windows 推送部署
-
-在开发机配置 `.deploy.local`（SSH 密码，已 gitignore），然后：
+本地推代码后，一条命令同步到 VPS（`git pull` + `build-lowmem.sh` + Bot + Web），与当前生产环境一致：
 
 ```bash
-# 推代码 + 编译 + 重启 bot
-python scripts/remote_deploy.py
+# 1) 配置 SSH（仅首次）
+cp .deploy.local.example .deploy.local   # 填入 DEPLOY_SSH_PASSWORD
 
-# 仅部署 / 重建 Web
-python scripts/remote_deploy.py web
+# 2) 提交并推送
+git push origin main
 
-# 仅重启 bot（不编译）
-python scripts/_restart_bot_only.py
+# 3) 一键部署 bot + web
+python scripts/deploy_production.py
+
+# 等价别名
+python scripts/remote_deploy.py production
+python scripts/remote_deploy.py deploy-full
 ```
 
-C++ / Python 策略改动：**必须**走 `remote_deploy.py` 或手动上传后在 VPS 上 `build-lowmem.sh`。本地监控脚本（如 `_watch_test_round.py`）只 SSH 观测，不会自动同步代码。
+| 选项 | 说明 |
+|------|------|
+| `--web-fast` | 不重编 frontend，仅 `server_restart_web.sh` |
+| `--skip-build` | 跳过 C++ 编译，只 pull + 重启 |
+| `--bot-only` | 只部署 bot |
+| `--setup` | 首次克隆仓库、装依赖、建 web.env 模板 |
+| `--force` | 本地未 push 也强制部署 |
+
+服务器上也可手动跑：`bash scripts/deploy_vps_full.sh`（在 `/opt/polymarket-bot`）。
+
+### 4. 分步推送（旧方式）
+
+```bash
+python scripts/remote_deploy.py          # bot + 编译
+python scripts/remote_deploy.py web        # Web 全量
+python scripts/_restart_bot_only.py        # 仅重启 bot
+```
+
+C++ 改动必须在 VPS 上 **`build-lowmem.sh`** 后重启才生效。
 
 ---
 
@@ -156,14 +151,7 @@ cp .env.example .env
 python start_bot.py
 ```
 
-Windows：`./start_windows.ps1` 或见 `build.sh` 注释。
-
-前端开发（`frontend/`）：
-
-```bash
-npm run dev
-npx prisma db push && npx tsx prisma/seed.ts
-```
+低内存 VPS：`bash build-lowmem.sh`。Windows：`./start_windows.ps1`。
 
 ---
 
@@ -171,24 +159,21 @@ npx prisma db push && npx tsx prisma/seed.ts
 
 | 任务 | 命令 |
 |------|------|
-| VPS 全量部署 bot | `python scripts/remote_deploy.py` |
+| VPS 部署 bot | `python scripts/remote_deploy.py` |
 | VPS 部署 Web | `python scripts/remote_deploy.py web` |
-| 重启 bot | `python scripts/_restart_bot_only.py` |
 | 实盘前检查 | `python scripts/_preflight_live_test.py` |
-| 单轮 live 验证 | `python scripts/_watch_test_round.py --enable-live --expect-assets btc` |
+| 单轮验证 | `python scripts/_watch_test_round.py --enable-live --expect-assets btc` |
 | 连开 N 局 | `python scripts/_watch_test_round.py --enable-live --rounds 2 --max-wait 1200` |
 | 紧急停开仓 | `python scripts/_emergency_stop_entries.py` |
-| 链上持仓补录 | `python scripts/live_lih_reconcile.py` |
+| 链上补录 | `python scripts/live_lih_reconcile.py` |
 
-5m slug：`{asset}-updown-5m-{unix_ts}`，`ts = (now // 300) * 300`。币种开关：`DH_ENABLE_5M_BTC=true` 等。
+5m slug：`{asset}-updown-5m-{unix_ts}`，`ts = (now // 300) * 300`。
 
 ---
 
 ## Docker 部署（可选）
 
-单机：`docker compose up -d --build` → `:3001` 仪表盘。多实例见 [deploy/README.md](deploy/README.md)。
-
-与 VPS 裸跑二选一；**当前线上用的是裸跑 + `server_start_*` 脚本**，不是 Docker。
+`docker compose up -d --build` → `:3001`。多实例见 [deploy/README.md](deploy/README.md)。**线上当前用 VPS 裸跑，非 Docker。**
 
 ---
 
@@ -196,14 +181,14 @@ npx prisma db push && npx tsx prisma/seed.ts
 
 | 路径 | 说明 |
 |------|------|
-| `.env.example` | Bot 策略 / 钱包 / LIH 参数 |
-| `web.env.example` | Web 登录 / NEXTAUTH / BOT_WS_URL |
-| `server_start_bot.sh` | VPS 后台启动 bot |
-| `server_start_web.sh` | VPS 全量 Web 安装 + 启动 |
-| `build-lowmem.sh` | 低内存 VPS 编译 C++ |
-| `trading-core/src/risk/RiskManager.*` | 风控、in-flight 锁、session |
-| `scripts/remote_deploy.py` | 本地 → VPS SSH 部署 |
-| `scripts/_watch_test_round.py` | 单轮 / 多轮 live 测试监控 |
+| `.env.example` | Bot 策略 / 钱包 |
+| `web.env.example` | Web 登录 / NEXTAUTH |
+| `server_start_bot.sh` / `server_start_web.sh` | VPS 启动脚本 |
+| `build-lowmem.sh` | 低内存编译 |
+| `scripts/deploy_production.py` | **一键部署** bot + web → VPS |
+| `scripts/deploy_vps_full.sh` | VPS 上全量部署（与生产一致） |
+| `.deploy.local.example` | SSH 密码模板（复制为 `.deploy.local`） |
+| `scripts/remote_deploy.py` | 本地 → VPS 分模式部署 |
 
 ---
 

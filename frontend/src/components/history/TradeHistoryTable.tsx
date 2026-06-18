@@ -86,7 +86,7 @@ export function TradeHistoryTable({ records, emptyText }: { records: TradeRecord
                       r.isPaperMode ? "bg-amber-500/20 text-amber-300" : "bg-emerald-500/20 text-emerald-300"
                     }`}
                   >
-                    {r.isPaperMode ? "纸面" : "实盘"}
+                    {r.isPaperMode ? "Shadow" : "实盘"}
                   </span>
                 </td>
                 <td className="px-3 py-2.5">

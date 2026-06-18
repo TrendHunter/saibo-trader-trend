@@ -16,18 +16,31 @@ PLACEHOLDER_KEYS = {
 }
 
 
+def _env_bool(key: str, default: bool = False) -> bool:
+    raw = os.getenv(key, "").strip().lower()
+    if not raw:
+        return default
+    if raw in ("false", "0", "no", "off"):
+        return False
+    if raw in ("true", "1", "yes", "on"):
+        return True
+    return default
+
+
 def main():
     issues = []
     warnings = []
     ok = []
 
-    paper = os.getenv("PAPER_MODE", "true").strip().lower() in ("true", "1")
+    live_dry = _env_bool("LIVE_LIH_DRY_RUN", True)
     pk = os.getenv("POLYMARKET_PRIVATE_KEY", "").strip()
     funder = os.getenv("POLYMARKET_FUNDER", "").strip()
     signer = os.getenv("POLYMARKET_SIGNER", "").strip()
     api_key = os.getenv("POLY_API_KEY", "").strip()
 
-    ok.append(f"PAPER_MODE={os.getenv('PAPER_MODE', 'true')} ({'paper — no real orders' if paper else 'LIVE — real money'})")
+    ok.append(
+        f"模式: {'shadow (LIVE_LIH_DRY_RUN=true)' if live_dry else '实盘 LIVE (将发真实订单)'}"
+    )
 
     if pk in PLACEHOLDER_KEYS or "YourWallet" in pk or "your" in pk.lower():
         issues.append("POLYMARKET_PRIVATE_KEY is still a placeholder — live trading will fail")
@@ -56,10 +69,7 @@ def main():
     elif funder and not signer:
         warnings.append("No SIGNER + FUNDER set → typical Polymarket proxy (signature_type=1)")
 
-    if paper:
-        if not api_key:
-            ok.append("POLY_API_* not set (normal in paper mode; derived when PAPER_MODE=false)")
-    elif not api_key:
+    if not api_key:
         issues.append("POLY_API_KEY missing — run: python derive_and_update_keys.py")
 
     # On-chain collateral on funder (pUSD + USDC)
@@ -149,8 +159,6 @@ def main():
     print("---")
     if issues:
         print("Verdict: NOT READY FOR LIVE")
-    elif paper:
-        print("Verdict: OK FOR PAPER — fix placeholders before going live")
     else:
         print("Verdict: CONFIG LOOKS OK — run: python test_auth.py")
 

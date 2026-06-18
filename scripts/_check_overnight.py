@@ -39,7 +39,7 @@ def main() -> int:
         print(
             run(
                 client,
-                f"grep -E '^(PAPER_MODE|LIVE_LIH_DRY_RUN|LIH_LEG1_COOLDOWN|LIH_REBALANCE_COOLDOWN)' '{PROJ}/.env'",
+                f"grep -E '^(LIVE_LIH_DRY_RUN|LIH_LEG1_COOLDOWN|LIH_REBALANCE_COOLDOWN)' '{PROJ}/.env'",
             )
         )
         print("\nPROCESSES:")

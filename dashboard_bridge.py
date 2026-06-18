@@ -102,9 +102,7 @@ def _apply_wallet_snapshot(detail: dict) -> bool:
     obj["cashBalance"] = cash
     obj["positionsValue"] = pos
     obj["walletSource"] = str(detail.get("source") or "live")
-    paper = os.getenv("PAPER_MODE", "false").lower() not in ("false", "0", "no", "off")
-    if not paper:
-        obj["balance"] = total
+    obj["balance"] = total
     latest_data = json.dumps(obj, ensure_ascii=False)
     if clients and loop:
         asyncio.run_coroutine_threadsafe(broadcast(latest_data), loop)
@@ -149,7 +147,7 @@ def _wallet_sync_once() -> None:
 def _print_startup_banner() -> None:
     cfg = public_config()
     pre = _read_preflight()
-    mode = (pre.get("mode") or ("paper" if os.getenv("PAPER_MODE", "false").lower() not in ("false", "0", "no", "off") else "live")).upper()
+    mode = (pre.get("mode") or "live").upper()
     ok = pre.get("ok", True)
     mark = "✅" if ok else "⚠️"
     print(f"\n{mark} Bridge 就绪 | 模式 {mode} | WS :{WS_PORT} | API :{HTTP_PORT}", file=sys.stderr)
@@ -188,7 +186,8 @@ def _maybe_print_core_ready(line: str) -> None:
     if "strategy" not in d or "balance" not in d:
         return
     _core_ready_printed = True
-    paper = d.get("isPaperMode", True)
+    dry = d.get("liveLihDryRun", False)
+    mode_label = "shadow" if dry else "实盘"
     bal = float(d.get("balance") or 0)
     open_n = d.get("openCount", 0)
     status = d.get("statusReason") or d.get("status", 0)
@@ -205,7 +204,7 @@ def _maybe_print_core_ready(line: str) -> None:
     lih_trades = d.get("totalLihTrades", 0)
     dh_trades = d.get("totalDhTrades", 0)
     print(
-        f"[CORE 就绪] {'纸面' if paper else '实盘'} | {strat} | 余额 ${bal:.2f} | 持仓 {open_n} | 状态 {status}",
+        f"[CORE 就绪] {mode_label} | {strat} | 余额 ${bal:.2f} | 持仓 {open_n} | 状态 {status}",
         file=sys.stderr,
     )
     print(
@@ -463,37 +462,36 @@ def _live_maintenance_loop() -> None:
     """Prune expired LIH rows from disk; chain reconcile only in real live (not shadow)."""
     while True:
         time.sleep(60)
-        if os.getenv("PAPER_MODE", "false").lower() in ("false", "0", "no", "off"):
-            try:
-                subprocess.run(
-                    [sys.executable, "scripts/prune_live_lih.py"],
-                    cwd=os.getcwd(),
-                    timeout=30,
-                    check=False,
-                )
-                live_dry = os.getenv("LIVE_LIH_DRY_RUN", "true").lower() not in (
-                    "false",
-                    "0",
-                    "no",
-                    "off",
-                )
-                recon_enabled = os.getenv("LIVE_LIH_RECONCILE_ENABLED", "false").lower() not in (
-                    "false",
-                    "0",
-                    "no",
-                    "off",
-                )
-                if live_dry or not recon_enabled:
-                    continue
-                subprocess.run(
-                    [sys.executable, "scripts/live_lih_reconcile.py", "--merge"],
-                    cwd=os.getcwd(),
-                    timeout=45,
-                    check=False,
-                )
-                write_runtime_config({"control": "reload_lih_state", "user": "maintenance"})
-            except Exception as exc:
-                print(f"[MAINT] prune failed: {exc}", file=sys.stderr)
+        try:
+            subprocess.run(
+                [sys.executable, "scripts/prune_live_lih.py"],
+                cwd=os.getcwd(),
+                timeout=30,
+                check=False,
+            )
+            live_dry = os.getenv("LIVE_LIH_DRY_RUN", "true").lower() not in (
+                "false",
+                "0",
+                "no",
+                "off",
+            )
+            recon_enabled = os.getenv("LIVE_LIH_RECONCILE_ENABLED", "false").lower() not in (
+                "false",
+                "0",
+                "no",
+                "off",
+            )
+            if live_dry or not recon_enabled:
+                continue
+            subprocess.run(
+                [sys.executable, "scripts/live_lih_reconcile.py", "--merge"],
+                cwd=os.getcwd(),
+                timeout=45,
+                check=False,
+            )
+            write_runtime_config({"control": "reload_lih_state", "user": "maintenance"})
+        except Exception as exc:
+            print(f"[MAINT] prune failed: {exc}", file=sys.stderr)
 
 
 def _mark_core_offline(reason: str = "trading-core stopped") -> None:

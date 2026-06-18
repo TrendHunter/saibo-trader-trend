@@ -22,7 +22,7 @@ _prev_tick_counts = {"btc": 0, "eth": 0, "sol": 0}
 _tick_rates = {"btc": 0.0, "eth": 0.0, "sol": 0.0}
 _last_rate_ts = time.time()
 
-PAPER_START = 1000.0
+DEFAULT_START = 1000.0
 STATUS_LABELS = {0: "ACTIVE", 1: "DAILY HALT", 2: "KILLED", 3: "PAUSED"}
 STATUS_COLORS = {0: "bold green", 1: "bold orange3", 2: "bold red", 3: "bold yellow"}
 
@@ -100,7 +100,7 @@ class Dashboard:
         total_pnl = d.get("totalPnl", 0.0)
         daily_s   = d.get("dailyStartingBalance", 1.0)
         peak      = d.get("peakBalance", balance) or balance
-        is_paper  = d.get("isPaperMode", True)
+        is_shadow = d.get("liveLihDryRun", True)
         start_bal = d.get("startingBalance", 1000.0)
 
         dpct = (daily_pnl / daily_s  * 100) if daily_s  > 0 else 0.0
@@ -110,7 +110,7 @@ class Dashboard:
 
         row = Text.assemble(
             (now_str, "dim"), "   ",
-            ("◆ PAPER" if is_paper else "◆ LIVE", "bold yellow" if is_paper else "bold green"), "  ",
+            ("◆ SHADOW" if is_shadow else "◆ LIVE", "bold yellow" if is_shadow else "bold green"), "  ",
             (f"● {sl}", sc), "   ",
             ("Uptime ", "dim"), (self._uptime(), "white"), "   ",
             ("Balance ", "dim"), (f"${balance:,.2f}", "bold green"), "   ",
@@ -270,7 +270,7 @@ class Dashboard:
     # ------------------------------------------------------------------ #
     def _risk_status(self) -> Panel:
         d = self.data
-        balance   = d.get("balance",   PAPER_START)
+        balance   = d.get("balance",   DEFAULT_START)
         daily_pnl = d.get("dailyPnl",  0.0)
         total_pnl = d.get("totalPnl",  0.0)
         dh_pnl    = d.get("dhPnl",     0.0)
@@ -278,7 +278,7 @@ class Dashboard:
         lih_on    = d.get("lihEnabled", True)
         open_pos  = d.get("openCount", 0)
         drawdown  = d.get("maxDrawdownPct", 0.0)
-        is_paper  = d.get("isPaperMode", True)
+        is_shadow = d.get("liveLihDryRun", True)
         start_bal = d.get("startingBalance", 1000.0)
         daily_limit = start_bal * 0.20  # 20% daily limit
 
@@ -357,13 +357,13 @@ class Dashboard:
         status = d.get("status", 0)
         sl = STATUS_LABELS.get(status, "UNKNOWN")
         sc = STATUS_COLORS.get(status, "bold white")
-        is_paper  = d.get("isPaperMode", True)
+        is_shadow = d.get("liveLihDryRun", True)
         start_bal = d.get("startingBalance", 1000.0)
         strat_footer = "STRATEGY: LIH" if d.get("lihEnabled", True) else "STRATEGY: DH (legacy)"
         
         footer = Text.assemble(
             (f" ● {sl} ", sc), "│ ",
-            ("PAPER MODE" if is_paper else "LIVE TRADING", "bold yellow" if is_paper else "bold green"),
+            ("SHADOW MODE" if is_shadow else "LIVE TRADING", "bold yellow" if is_shadow else "bold green"),
             (f" · ${start_bal:,.0f} BASE", "white"), " │ POLYGON:137 │ ",
             (strat_footer, "cyan"), " │ Ctrl+C to stop",
         )

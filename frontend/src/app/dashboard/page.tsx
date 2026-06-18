@@ -30,19 +30,16 @@ export default function DashboardPage() {
     setMounted(true);
   }, []);
 
+  const isShadow = liveState.liveLihDryRun !== false;
   const cumulativePnl =
-    (liveState.tradesBaselineTs ?? 0) > 0 && !liveState.isPaperMode
-      ? strategyPnl
-      : liveState.totalPnl;
+    (liveState.tradesBaselineTs ?? 0) > 0 ? strategyPnl : liveState.totalPnl;
   const pnlColor = cumulativePnl >= 0 ? "text-emerald-400" : "text-red-400";
   const coreStatus = coreStatusLabel(liveState.status, liveState.botStreamConnected);
   const hasLiveWallet =
     liveState.walletSource === "live" &&
     liveState.realWalletBalance != null &&
     liveState.realWalletBalance > 0;
-  const displayBalance = liveState.isPaperMode
-    ? liveState.balance
-    : liveState.realWalletBalance ?? liveState.balance;
+  const displayBalance = liveState.realWalletBalance ?? liveState.balance;
 
   return (
     <DashboardLayout>
@@ -55,11 +52,11 @@ export default function DashboardPage() {
 
         <PreflightBanner />
 
-        {liveState.isPaperMode && (
+        {isShadow && (
           <div className="rounded-lg border border-amber-500/25 bg-amber-500/8 px-4 py-2.5 text-[13px] text-amber-100/90">
-            📋 <strong>纸面交易模式</strong> — 以下为纸面数据，不会动用真实资金。策略信号已按
+            📋 <strong>Shadow 模式</strong>（LIVE_LIH_DRY_RUN=true）— 验簿与信号，不向 CLOB 发单。费率边际已按
             {liveState.useDynamicFees ? " Polymarket V2 动态费率曲线" : ` 约 ${(liveState.feeRate * 100).toFixed(1)}% 扁平费率`}
-            扣除手续费边际，开仓/平仓时从余额扣减 taker 费。
+            扣除。
           </div>
         )}
 
@@ -71,15 +68,7 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent className="pb-4">
               <div className="text-2xl font-mono font-bold tracking-tight">${displayBalance.toFixed(2)}</div>
-              {liveState.isPaperMode && hasLiveWallet && (
-                <p className="text-xs text-muted-foreground mt-1 font-mono">
-                  真实钱包 ${liveState.realWalletBalance!.toFixed(2)}
-                  {(liveState.positionsValue ?? 0) > 0 && (
-                    <span> · 持仓市值 ${(liveState.positionsValue ?? 0).toFixed(2)}</span>
-                  )}
-                </p>
-              )}
-              {!liveState.isPaperMode && liveState.cashBalance != null && liveState.cashBalance > 0 && (
+              {hasLiveWallet && liveState.cashBalance != null && liveState.cashBalance > 0 && (
                 <p className="text-xs text-muted-foreground mt-1 font-mono">
                   现金 ${liveState.cashBalance.toFixed(2)}
                   {(liveState.positionsValue ?? 0) > 0 && (

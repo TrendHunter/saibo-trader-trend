@@ -34,8 +34,9 @@ def main() -> int:
 
     steps = [
         f"rm -f '{PROJ}/logs/paper_state.json' '{PROJ}/logs/paper_state.json.tmp' 2>/dev/null; echo ok",
-        f"grep -q '^PAPER_MODE=' '{PROJ}/.env' && sed -i 's/^PAPER_MODE=.*/PAPER_MODE=false/' '{PROJ}/.env' "
-        f"|| echo 'PAPER_MODE=false' >> '{PROJ}/.env'",
+        f"grep -q '^LIVE_LIH_DRY_RUN=' '{PROJ}/.env' && "
+        f"sed -i 's/^LIVE_LIH_DRY_RUN=.*/LIVE_LIH_DRY_RUN=true/' '{PROJ}/.env' "
+        f"|| echo 'LIVE_LIH_DRY_RUN=true' >> '{PROJ}/.env'",
         f"python3 -c \"import json,pathlib; p=pathlib.Path('{PROJ}/logs/live_state.json'); "
         "d=json.loads(p.read_text()) if p.is_file() else {{}}; "
         "d['open_lih_positions']={{}}; d['lih_session_legs_used']=0; "
@@ -48,7 +49,7 @@ def main() -> int:
         "pgrep -af 'start_bot|trading-core' || true",
         f"curl -s http://127.0.0.1:8081/api/config | python3 -c "
         "\"import sys,json; l=json.load(sys.stdin).get('live',{}); "
-        "print('openCount', l.get('openCount'), 'paper', l.get('isPaperMode'))\"",
+        "print('openCount', l.get('openCount'), 'dryRun', l.get('liveLihDryRun'))\"",
     ]
     for step in steps:
         print(f">>> {step[:90]}")
