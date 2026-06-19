@@ -29,7 +29,16 @@ LegInHedgeDetector::LegInHedgeDetector(StateStore& store,
                                        bool flex_rebalance,
                                        double flex_dilute_ratio,
                                        bool leg1_trend_align,
-                                       double trend_lookback_sec)
+                                       double trend_lookback_sec,
+                                       double endgame_secs,
+                                       double endgame_hold_ask,
+                                       double endgame_resume_hedge_ask,
+                                       double endgame_soft_cap,
+                                       double endgame_step_small,
+                                       double endgame_step_large,
+                                       double endgame_gap_large,
+                                       double endgame_override_secs,
+                                       double endgame_override_cooldown)
     : store_(store),
       markets_(std::move(markets)),
       leg1_max_price_(leg1_max_price),
@@ -46,20 +55,33 @@ LegInHedgeDetector::LegInHedgeDetector(StateStore& store,
       flex_rebalance_(flex_rebalance),
       flex_dilute_ratio_(flex_dilute_ratio),
       leg1_trend_align_(leg1_trend_align),
-      trend_lookback_sec_(trend_lookback_sec) {}
+      trend_lookback_sec_(trend_lookback_sec),
+      endgame_secs_(endgame_secs),
+      endgame_hold_ask_(endgame_hold_ask),
+      endgame_resume_hedge_ask_(endgame_resume_hedge_ask),
+      endgame_soft_cap_(endgame_soft_cap),
+      endgame_step_small_(endgame_step_small),
+      endgame_step_large_(endgame_step_large),
+      endgame_gap_large_(endgame_gap_large),
+      endgame_override_secs_(endgame_override_secs),
+      endgame_override_cooldown_(endgame_override_cooldown) {}
 
-bool LegInHedgeDetector::leg1_trend_allows(const MarketInfo& market, bool pick_yes) const {
-    if (!leg1_trend_align_) return true;
+bool LegInHedgeDetector::spot_trend_favors(const MarketInfo& market, bool pick_yes) const {
     const std::string asset = market.asset;
-    if (asset.empty()) return true;
+    if (asset.empty()) return false;
 
     const auto past = store_.get_price_at(asset, trend_lookback_sec_);
     const PriceTick latest = store_.get_latest_price(asset);
-    if (!past || latest.price <= kFloatTol) return true;
+    if (!past || latest.price <= kFloatTol) return false;
 
     const double move = latest.price - *past;
     if (pick_yes) return move >= -kFloatTol;
     return move <= kFloatTol;
+}
+
+bool LegInHedgeDetector::leg1_trend_allows(const MarketInfo& market, bool pick_yes) const {
+    if (!leg1_trend_align_) return true;
+    return spot_trend_favors(market, pick_yes);
 }
 
 LegInHedgeDetector::Quote LegInHedgeDetector::quote_for(const MarketInfo& market) const {
@@ -348,9 +370,15 @@ std::optional<LegInAction> LegInHedgeDetector::evaluate(double now_ms, risk::Ris
         const double port_avg = (yes_avg > kFloatTol && no_avg > kFloatTol) ? yes_avg + no_avg : 0.0;
 
         if (gap > kFloatTol) {
-            if (rebalance_cooldown_seconds_ > 0.0 &&
+            const bool in_endgame = secs_left <= endgame_secs_;
+            const bool endgame_override = in_endgame && secs_left <= endgame_override_secs_;
+            const double rebal_cd = endgame_override
+                ? endgame_override_cooldown_
+                : rebalance_cooldown_seconds_;
+
+            if (rebal_cd > 0.0 &&
                 last_rebalance_time_.contains(key) &&
-                (now_sec - last_rebalance_time_.at(key)) < rebalance_cooldown_seconds_) {
+                (now_sec - last_rebalance_time_.at(key)) < rebal_cd) {
                 log_rebalance_status(market, key, now_sec, pos, q, yes_avg, no_avg, gap);
                 continue;
             }
@@ -373,19 +401,18 @@ std::optional<LegInAction> LegInHedgeDetector::evaluate(double now_ms, risk::Ris
 
             const double marginal = heavy_avg + light_ask;
             const bool at_target = marginal <= target_combined_ + kFloatTol;
-            const bool force = secs_left <= force_balance_secs_;
+            const bool force = secs_left <= force_balance_secs_ && !in_endgame;
 
-            auto try_light_hedge = [&](double max_fill, bool require_full_gap) -> std::optional<LegInAction> {
+            auto try_light_hedge = [&](double max_fill, bool require_full_gap,
+                                       const char* mode) -> std::optional<LegInAction> {
                 const double capped_gap = std::min({gap, max_fill, remaining_matched});
                 if (capped_gap <= kFloatTol) return std::nullopt;
                 const double fill = hedge_fill_shares(
                     light_token, capped_gap, light_ask, max_leg_usdc, remaining_matched);
                 if (fill <= kFloatTol) return std::nullopt;
-                // 配平/force：单笔预算不够覆盖整个 gap 时不强上
                 if (require_full_gap && fill + kFloatTol < capped_gap) return std::nullopt;
                 const double cost = fill * light_ask;
                 if (!rm.can_open_lih_leg(cost, true, &pos.lih_id, fill).first) return std::nullopt;
-                const char* mode = at_target ? "hedge" : (force ? "force" : (flex_rebalance_ ? "flex-hedge" : "over-target"));
                 LegInAction act;
                 act.kind = LegInAction::Kind::CompleteHedge;
                 act.market = market;
@@ -399,23 +426,53 @@ std::optional<LegInAction> LegInHedgeDetector::evaluate(double now_ms, risk::Ris
                 return act;
             };
 
+            if (in_endgame) {
+                const bool on_trend = spot_trend_favors(market, heavy_yes);
+                const bool hold_win = heavy_ask >= endgame_hold_ask_ - kFloatTol
+                    && heavy_ask >= endgame_resume_hedge_ask_ - kFloatTol
+                    && on_trend;
+                if (hold_win) {
+                    std::string msg = fmt::format(
+                        "[LIH DEBUG] endgame-hold | {} {}m | heavy {:.4f} on-trend | {:.0f}s left — skip hedge",
+                        market.asset, market.window_minutes, heavy_ask, secs_left);
+                    spdlog::info(msg);
+                    store_.push_telemetry(msg);
+                    continue;
+                }
+
+                const double step = gap >= endgame_gap_large_ - kFloatTol
+                    ? endgame_step_large_ : endgame_step_small_;
+                const char* mode = endgame_override ? "endgame-override" : "endgame";
+
+                if (at_target) {
+                    if (auto act = try_light_hedge(step, false, mode)) return act;
+                    continue;
+                }
+
+                const bool within_soft_cap = marginal <= endgame_soft_cap_ + kFloatTol;
+                if (within_soft_cap || endgame_override) {
+                    if (auto act = try_light_hedge(step, false, mode)) return act;
+                }
+                continue;
+            }
+
             const double budget_step = cap_shares_budget(leg1_shares_, max_leg_usdc, light_ask);
 
             if (at_target || force) {
-                if (auto act = try_light_hedge(gap, force)) return act;
+                const char* mode = at_target ? "hedge" : "force";
+                if (auto act = try_light_hedge(gap, force, mode)) return act;
                 if (!force && budget_step > kFloatTol) {
-                    if (auto act = try_light_hedge(budget_step, false)) return act;
+                    if (auto act = try_light_hedge(budget_step, false, mode)) return act;
                 }
                 continue;
             }
 
             if (flex_rebalance_) {
-                // Leg1-only: never add to heavy side — only buy the missing (light) leg.
                 if (matched <= kFloatTol && (at_target || force) && budget_step > kFloatTol) {
-                    if (auto act = try_light_hedge(budget_step, force)) return act;
+                    const char* mode = force ? "force" : "flex-hedge";
+                    if (auto act = try_light_hedge(budget_step, force, mode)) return act;
                     continue;
                 }
-                // Heavy dilute only when both legs already exist (matched pairs).
                 if (matched > kFloatTol &&
                     heavy_ask + kFloatTol < heavy_avg * flex_dilute_ratio_ &&
                     heavy_ask <= leg1_max_price_ + kFloatTol) {
@@ -443,15 +500,14 @@ std::optional<LegInAction> LegInHedgeDetector::evaluate(double now_ms, risk::Ris
                         }
                     }
                 }
-                // Leg1-only (matched==0): wait for cheap hedge or force near expiry; no over-target flex-hedge.
                 if (matched > kFloatTol && budget_step > kFloatTol) {
-                    if (auto act = try_light_hedge(budget_step, false)) return act;
+                    if (auto act = try_light_hedge(budget_step, false, "flex-hedge")) return act;
                 }
                 continue;
             }
 
             if (!allow_over_target_) continue;
-            if (auto act = try_light_hedge(gap, true)) return act;
+            if (auto act = try_light_hedge(gap, true, "over-target")) return act;
             continue;
         }
 

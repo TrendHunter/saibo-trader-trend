@@ -38,7 +38,16 @@ public:
                        bool flex_rebalance = false,
                        double flex_dilute_ratio = 0.95,
                        bool leg1_trend_align = false,
-                       double trend_lookback_sec = 60.0);
+                       double trend_lookback_sec = 60.0,
+                       double endgame_secs = 60.0,
+                       double endgame_hold_ask = 0.90,
+                       double endgame_resume_hedge_ask = 0.89,
+                       double endgame_soft_cap = 1.15,
+                       double endgame_step_small = 5.0,
+                       double endgame_step_large = 10.0,
+                       double endgame_gap_large = 10.0,
+                       double endgame_override_secs = 20.0,
+                       double endgame_override_cooldown = 1.0);
 
     std::optional<LegInAction> evaluate(double now_ms, risk::RiskManager& rm);
 
@@ -60,9 +69,16 @@ public:
     void set_flex_dilute_ratio(double v) { flex_dilute_ratio_ = v; }
     void set_leg1_trend_align(bool v) { leg1_trend_align_ = v; }
     void set_trend_lookback_sec(double v) { trend_lookback_sec_ = v; }
+    void set_endgame_secs(double v) { endgame_secs_ = v; }
+    void set_endgame_hold_ask(double v) { endgame_hold_ask_ = v; }
+    void set_endgame_resume_hedge_ask(double v) { endgame_resume_hedge_ask_ = v; }
+    void set_endgame_soft_cap(double v) { endgame_soft_cap_ = v; }
+    void set_endgame_override_secs(double v) { endgame_override_secs_ = v; }
 
 private:
     bool leg1_trend_allows(const MarketInfo& market, bool pick_yes) const;
+    /** Binance spot direction for endgame hold (always checked; independent of leg1_trend_align). */
+    bool spot_trend_favors(const MarketInfo& market, bool pick_yes) const;
     struct Quote {
         double yes = 0.0;
         double no = 0.0;
@@ -104,6 +120,15 @@ private:
     double flex_dilute_ratio_;
     bool leg1_trend_align_;
     double trend_lookback_sec_;
+    double endgame_secs_;
+    double endgame_hold_ask_;
+    double endgame_resume_hedge_ask_;
+    double endgame_soft_cap_;
+    double endgame_step_small_;
+    double endgame_step_large_;
+    double endgame_gap_large_;
+    double endgame_override_secs_;
+    double endgame_override_cooldown_;
     mutable std::unordered_map<std::string, double> last_status_log_sec_;
     std::unordered_map<std::string, double> last_leg1_time_;
     std::unordered_map<std::string, double> last_rebalance_time_;

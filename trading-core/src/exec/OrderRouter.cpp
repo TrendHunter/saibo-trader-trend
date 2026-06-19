@@ -38,7 +38,8 @@ bool bridge_fill_is_terminal_dead(const std::string& error_msg, const std::strin
 }
 
 bool lih_action_is_force(const trading::LegInAction& act) {
-    return act.note.find("force") != std::string::npos;
+    return act.note.find("force") != std::string::npos
+        || act.note.find("endgame") != std::string::npos;
 }
 } // namespace
 

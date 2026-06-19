@@ -25,7 +25,7 @@ Polymarket **5m / 15m Up-Down** 市场（BTC / ETH / SOL）自动交易。主策
 
 保守实盘默认：全局单槽（`LIH_ONE_SLOT_GLOBAL`）、余额低于 $10 不开 leg1、窗口最后 30s 不开新 leg1。
 
-**版本留档**：见 [`docs/LIH_VERSION.md`](docs/LIH_VERSION.md)（当前基线 `v0.9.0-lih-baseline` / commit `0268601`）。
+**版本留档**：见 [`docs/LIH_VERSION.md`](docs/LIH_VERSION.md)（当前 `v0.10.0-endgame`）。
 
 ### Leg1 / 对冲锁（不留尾巴）
 

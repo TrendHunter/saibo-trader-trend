@@ -5,14 +5,24 @@ Git 以 commit hash 为准；语义版本便于口头对齐。
 
 ---
 
-## 当前基线：`v0.9.0-lih-baseline`
+## 当前基线：`v0.10.0-endgame`
 
 | 项 | 值 |
 |---|---|
-| **Git** | `0268601` — `feat: LIH leg1 Binance trend filter and 60s force-balance window` |
-| **日期** | 2026-06-19 |
-| **VPS** | `70.34.221.132:/opt/polymarket-bot` — 已 SFTP 同步上述 3 个 C++ 源文件并编译；**暂停中**（`logs/STOP_TRADING`） |
-| **下一版代号** | `v0.10.0-endgame`（末段软顶分批 + hold 赢单 — **未开发**） |
+| **Git** | _(pending)_ — `feat: LIH endgame batch hedge, hold on-trend, soft cap` |
+| **上一基线** | `v0.9.0-lih-baseline` @ `0268601` |
+| **VPS** | 部署后更新 |
+
+---
+
+## v0.10.0 新增（末段）
+
+- **末段窗口** `LIH_ENDGAME_SECS=60`：剩余 ≤60s 且有 gap 时进入 endgame（替代旧 force 逻辑）。
+- **配平优先**：5/10 份小步买缺腿；gap≥10 用 10 份，否则 5 份。
+- **软顶** `LIH_ENDGAME_SOFT_CAP=1.15`；最后 `LIH_ENDGAME_OVERRIDE_SECS=20` 可突破软顶关 gap。
+- **Hold 例外**：持有腿 ask≥0.90 且 Binance 顺势 → 不配平，等结算。
+- **恢复配平**：ask 跌回 <0.89 或逆势 → 继续 endgame 配平。
+- **末段重试**：最后 20s rebalance cooldown 降至 1s（`LIH_ENDGAME_OVERRIDE_COOLDOWN`）。
 
 ---
 
@@ -53,18 +63,22 @@ LIH_MAX_USDC_PER_SLOT=10
 
 ---
 
-## v0.9.0 已知限制
+## v0.10.0 已知限制
 
 | 限制 | 说明 |
 |------|------|
-| 无末段分批 | Force 窗口内逻辑与整段相同，无 1.15 软顶、无分步追平 |
-| 无「高价 hold」 | 末段不会因持有腿 ≥0.90 而跳过配平 |
-| Pending 无即时重下单 | 挂单跟踪中 **不 retry**；abandon 后靠 detector 下一 tick（受 rebalance cooldown 约束） |
-| VPS git 脏树 | 服务器本地改动导致 `git pull` 失败；部署需 SFTP 指定文件或清理后 pull |
-| 最小份数 | 检测器按 **≥$1 USDC** 过滤；Polymarket 实际 **≥5 shares** 由下单前 `leg_meets_minimum` / 簿深度 resize 约束 |
+| Pending 无即时重下单 | 挂单跟踪中不 retry；abandon 后下一 tick 再试（末段最后 20s cooldown=1s） |
+| 末段仅买缺腿 | 主路径 CompleteHedge；逆势「双边调仓」仍通过多步补缺腿实现，无独立 paired 末段模式 |
+| VPS git 脏树 | 服务器 `git pull` 可能失败；部署需 SFTP 或清理本地改动 |
 
 ---
 
+## 待开发
+
+_(none — endgame shipped in v0.10)_
+
+<!--
+Legacy draft below retained for history.
 ## 待开发：`v0.10.0-endgame`（产品共识草案）
 
 > 以下为用户 2026-06-19 讨论结论，**尚未编码**。
@@ -125,12 +139,15 @@ LIH_ENDGAME_GAP_LARGE=10
 LIH_ENDGAME_OVERRIDE_SECS=20
 ```
 
+-->
+
 ---
 
 ## 版本历史
 
 | 版本 | Git | 摘要 |
 |------|-----|------|
+| **v0.10.0-endgame** | _(pending)_ | 末段分批配平、软顶 1.15、顺势 hold ≥0.90、20s override |
 | **v0.9.0-lih-baseline** | `0268601` | Leg1 趋势过滤 + 60s force；启动暂停 + 链上 reconcile merge 修复 |
 | v0.8.x | `6da72c1` | Reconcile merge 不抹对侧腿 |
 | v0.8.x | `36c6e72` | 重启暂停、链上 reconcile、CLOB pending |

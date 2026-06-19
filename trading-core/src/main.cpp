@@ -838,6 +838,31 @@ static void apply_runtime_config(
                     std::lock_guard<std::mutex> lock(detector_mutex);
                     if (lih_detector) lih_detector->set_trend_lookback_sec(x);
                     store.push_telemetry(fmt::format("CONFIG LIH_TREND_LOOKBACK_SEC={}", v));
+                } else if (k == "LIH_ENDGAME_SECS") {
+                    const double x = std::stod(v);
+                    std::lock_guard<std::mutex> lock(detector_mutex);
+                    if (lih_detector) lih_detector->set_endgame_secs(x);
+                    store.push_telemetry(fmt::format("CONFIG LIH_ENDGAME_SECS={}", v));
+                } else if (k == "LIH_ENDGAME_HOLD_ASK") {
+                    const double x = std::stod(v);
+                    std::lock_guard<std::mutex> lock(detector_mutex);
+                    if (lih_detector) lih_detector->set_endgame_hold_ask(x);
+                    store.push_telemetry(fmt::format("CONFIG LIH_ENDGAME_HOLD_ASK={}", v));
+                } else if (k == "LIH_ENDGAME_RESUME_HEDGE_ASK") {
+                    const double x = std::stod(v);
+                    std::lock_guard<std::mutex> lock(detector_mutex);
+                    if (lih_detector) lih_detector->set_endgame_resume_hedge_ask(x);
+                    store.push_telemetry(fmt::format("CONFIG LIH_ENDGAME_RESUME_HEDGE_ASK={}", v));
+                } else if (k == "LIH_ENDGAME_SOFT_CAP") {
+                    const double x = std::stod(v);
+                    std::lock_guard<std::mutex> lock(detector_mutex);
+                    if (lih_detector) lih_detector->set_endgame_soft_cap(x);
+                    store.push_telemetry(fmt::format("CONFIG LIH_ENDGAME_SOFT_CAP={}", v));
+                } else if (k == "LIH_ENDGAME_OVERRIDE_SECS") {
+                    const double x = std::stod(v);
+                    std::lock_guard<std::mutex> lock(detector_mutex);
+                    if (lih_detector) lih_detector->set_endgame_override_secs(x);
+                    store.push_telemetry(fmt::format("CONFIG LIH_ENDGAME_OVERRIDE_SECS={}", v));
                 } else if (k == "LIH_MAX_REBALANCE_SHARES") {
                     const double x = std::stod(v);
                     std::lock_guard<std::mutex> lock(detector_mutex);
@@ -1042,6 +1067,16 @@ int main() {
         bool lih_leg1_trend_align = env_flag_true(env, "LIH_LEG1_TREND_ALIGN", false);
         double lih_trend_lookback_sec = env.count("LIH_TREND_LOOKBACK_SEC")
             ? std::stod(env["LIH_TREND_LOOKBACK_SEC"]) : 60.0;
+        double lih_endgame_secs = env.count("LIH_ENDGAME_SECS")
+            ? std::stod(env["LIH_ENDGAME_SECS"]) : lih_force_balance_secs;
+        double lih_endgame_hold_ask = env_double_or(env, "LIH_ENDGAME_HOLD_ASK", 0.90);
+        double lih_endgame_resume_hedge_ask = env_double_or(env, "LIH_ENDGAME_RESUME_HEDGE_ASK", 0.89);
+        double lih_endgame_soft_cap = env_double_or(env, "LIH_ENDGAME_SOFT_CAP", 1.15);
+        double lih_endgame_step_small = env_double_or(env, "LIH_ENDGAME_STEP_SHARES_SMALL", 5.0);
+        double lih_endgame_step_large = env_double_or(env, "LIH_ENDGAME_STEP_SHARES_LARGE", 10.0);
+        double lih_endgame_gap_large = env_double_or(env, "LIH_ENDGAME_GAP_LARGE", 10.0);
+        double lih_endgame_override_secs = env_double_or(env, "LIH_ENDGAME_OVERRIDE_SECS", 20.0);
+        double lih_endgame_override_cooldown = env_double_or(env, "LIH_ENDGAME_OVERRIDE_COOLDOWN", 1.0);
         std::string mirror_path = env.count("LIVE_MIRROR_PATH") ? env["LIVE_MIRROR_PATH"] : "logs/live_mirror.json";
 
         const std::string strategy = lih_enabled ? "leg_in" : "dump_hedge";
@@ -1101,6 +1136,7 @@ int main() {
             spdlog::info(
                 "LIH config | leg1<={:.2f} target<={:.2f} entry={:.1f} mode={} dilute={:.2f} "
                 "leg1_min={:.0f}s hedge_min={:.0f}s force={:.0f}s trend_align={} lookback={:.0f}s "
+                "endgame={:.0f}s hold>={:.2f} soft_cap={:.2f} step={:.0f}/{:.0f} override={:.0f}s "
                 "leg1_cd={} rebal_cd={} max_rebal_sh={} max_matched_sh={} slot_cap={} "
                 "pause_after_round={} session_legs={}",
                 lih_leg1_max, lih_target_combined, lih_leg1_shares,
@@ -1109,6 +1145,8 @@ int main() {
                 lih_leg1_min_secs, lih_min_secs,
                 lih_force_balance_secs,
                 lih_leg1_trend_align ? "on" : "off", lih_trend_lookback_sec,
+                lih_endgame_secs, lih_endgame_hold_ask, lih_endgame_soft_cap,
+                lih_endgame_step_small, lih_endgame_step_large, lih_endgame_override_secs,
                 lih_leg1_cooldown <= 0.0 ? "off" : fmt::format("{:.0f}s", lih_leg1_cooldown),
                 lih_rebalance_cooldown <= 0.0 ? "off" : fmt::format("{:.0f}s", lih_rebalance_cooldown),
                 max_rebal_str, max_matched_str, slot_cap_str,
@@ -1487,7 +1525,11 @@ int main() {
                             lih_use_mirror, lih_leg1_shares, lih_allow_over_target,
                             lih_force_balance_secs, lih_max_rebalance_shares,
                             lih_flex_rebalance, lih_flex_dilute_ratio,
-                            lih_leg1_trend_align, lih_trend_lookback_sec);
+                            lih_leg1_trend_align, lih_trend_lookback_sec,
+                            lih_endgame_secs, lih_endgame_hold_ask, lih_endgame_resume_hedge_ask,
+                            lih_endgame_soft_cap, lih_endgame_step_small, lih_endgame_step_large,
+                            lih_endgame_gap_large, lih_endgame_override_secs,
+                            lih_endgame_override_cooldown);
                     }
                     risk_manager.sync_lih_from_markets(all_m);
                 }
