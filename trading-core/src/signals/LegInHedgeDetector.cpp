@@ -27,7 +27,9 @@ LegInHedgeDetector::LegInHedgeDetector(StateStore& store,
                                        double force_balance_secs,
                                        double max_rebalance_shares,
                                        bool flex_rebalance,
-                                       double flex_dilute_ratio)
+                                       double flex_dilute_ratio,
+                                       bool leg1_trend_align,
+                                       double trend_lookback_sec)
     : store_(store),
       markets_(std::move(markets)),
       leg1_max_price_(leg1_max_price),
@@ -42,7 +44,23 @@ LegInHedgeDetector::LegInHedgeDetector(StateStore& store,
       force_balance_secs_(force_balance_secs),
       max_rebalance_shares_(max_rebalance_shares),
       flex_rebalance_(flex_rebalance),
-      flex_dilute_ratio_(flex_dilute_ratio) {}
+      flex_dilute_ratio_(flex_dilute_ratio),
+      leg1_trend_align_(leg1_trend_align),
+      trend_lookback_sec_(trend_lookback_sec) {}
+
+bool LegInHedgeDetector::leg1_trend_allows(const MarketInfo& market, bool pick_yes) const {
+    if (!leg1_trend_align_) return true;
+    const std::string asset = market.asset;
+    if (asset.empty()) return true;
+
+    const auto past = store_.get_price_at(asset, trend_lookback_sec_);
+    const PriceTick latest = store_.get_latest_price(asset);
+    if (!past || latest.price <= kFloatTol) return true;
+
+    const double move = latest.price - *past;
+    if (pick_yes) return move >= -kFloatTol;
+    return move <= kFloatTol;
+}
 
 LegInHedgeDetector::Quote LegInHedgeDetector::quote_for(const MarketInfo& market) const {
     Quote q;
@@ -277,6 +295,10 @@ std::optional<LegInAction> LegInHedgeDetector::evaluate(double now_ms, risk::Ris
             }
 
             const bool pick_yes = yes_cheap && (!no_cheap || q.yes <= q.no);
+            if (!leg1_trend_allows(market, pick_yes)) {
+                log_entry_status(market, key, now_sec, q, pick_yes ? "trend blocks YES" : "trend blocks NO");
+                continue;
+            }
             const double px = pick_yes ? q.yes : q.no;
             double shares = leg1_shares_;
             if (max_matched_cap > kFloatTol) {

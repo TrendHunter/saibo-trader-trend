@@ -33,10 +33,12 @@ public:
                        bool use_mirror_prices = true,
                        double leg1_shares = 10.0,
                        bool allow_over_target = true,
-                       double force_balance_secs = 45.0,
+                       double force_balance_secs = 60.0,
                        double max_rebalance_shares = 0.0,
                        bool flex_rebalance = false,
-                       double flex_dilute_ratio = 0.95);
+                       double flex_dilute_ratio = 0.95,
+                       bool leg1_trend_align = false,
+                       double trend_lookback_sec = 60.0);
 
     std::optional<LegInAction> evaluate(double now_ms, risk::RiskManager& rm);
 
@@ -56,8 +58,11 @@ public:
     void set_max_rebalance_shares(double v) { max_rebalance_shares_ = v; }
     void set_flex_rebalance(bool v) { flex_rebalance_ = v; }
     void set_flex_dilute_ratio(double v) { flex_dilute_ratio_ = v; }
+    void set_leg1_trend_align(bool v) { leg1_trend_align_ = v; }
+    void set_trend_lookback_sec(double v) { trend_lookback_sec_ = v; }
 
 private:
+    bool leg1_trend_allows(const MarketInfo& market, bool pick_yes) const;
     struct Quote {
         double yes = 0.0;
         double no = 0.0;
@@ -97,6 +102,8 @@ private:
     double max_rebalance_shares_;
     bool flex_rebalance_;
     double flex_dilute_ratio_;
+    bool leg1_trend_align_;
+    double trend_lookback_sec_;
     mutable std::unordered_map<std::string, double> last_status_log_sec_;
     std::unordered_map<std::string, double> last_leg1_time_;
     std::unordered_map<std::string, double> last_rebalance_time_;

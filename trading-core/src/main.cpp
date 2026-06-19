@@ -828,6 +828,16 @@ static void apply_runtime_config(
                     std::lock_guard<std::mutex> lock(detector_mutex);
                     if (lih_detector) lih_detector->set_force_balance_secs(x);
                     store.push_telemetry(fmt::format("CONFIG LIH_FORCE_BALANCE_SECS={}", v));
+                } else if (k == "LIH_LEG1_TREND_ALIGN") {
+                    const bool enabled = parse_config_bool(v);
+                    std::lock_guard<std::mutex> lock(detector_mutex);
+                    if (lih_detector) lih_detector->set_leg1_trend_align(enabled);
+                    store.push_telemetry(fmt::format("CONFIG LIH_LEG1_TREND_ALIGN={}", enabled ? "true" : "false"));
+                } else if (k == "LIH_TREND_LOOKBACK_SEC") {
+                    const double x = std::stod(v);
+                    std::lock_guard<std::mutex> lock(detector_mutex);
+                    if (lih_detector) lih_detector->set_trend_lookback_sec(x);
+                    store.push_telemetry(fmt::format("CONFIG LIH_TREND_LOOKBACK_SEC={}", v));
                 } else if (k == "LIH_MAX_REBALANCE_SHARES") {
                     const double x = std::stod(v);
                     std::lock_guard<std::mutex> lock(detector_mutex);
@@ -1010,7 +1020,7 @@ int main() {
         double lih_leg1_shares = env.count("LIH_LEG1_SHARES") ? std::stod(env["LIH_LEG1_SHARES"]) : 10.0;
         bool lih_allow_over_target = env_flag_true(env, "LIH_ALLOW_OVER_TARGET", true);
         double lih_force_balance_secs = env.count("LIH_FORCE_BALANCE_SECS")
-            ? std::stod(env["LIH_FORCE_BALANCE_SECS"]) : 45.0;
+            ? std::stod(env["LIH_FORCE_BALANCE_SECS"]) : 60.0;
         double lih_max_rebalance_shares = env.count("LIH_MAX_REBALANCE_SHARES")
             ? std::stod(env["LIH_MAX_REBALANCE_SHARES"]) : 0.0;
         double lih_max_matched_shares = env.count("LIH_MAX_MATCHED_SHARES")
@@ -1029,6 +1039,9 @@ int main() {
         bool lih_flex_rebalance = (lih_rebalance_mode == "flex" || lih_rebalance_mode == "b");
         double lih_flex_dilute_ratio = env.count("LIH_FLEX_DILUTE_RATIO")
             ? std::stod(env["LIH_FLEX_DILUTE_RATIO"]) : 0.95;
+        bool lih_leg1_trend_align = env_flag_true(env, "LIH_LEG1_TREND_ALIGN", false);
+        double lih_trend_lookback_sec = env.count("LIH_TREND_LOOKBACK_SEC")
+            ? std::stod(env["LIH_TREND_LOOKBACK_SEC"]) : 60.0;
         std::string mirror_path = env.count("LIVE_MIRROR_PATH") ? env["LIVE_MIRROR_PATH"] : "logs/live_mirror.json";
 
         const std::string strategy = lih_enabled ? "leg_in" : "dump_hedge";
@@ -1087,13 +1100,15 @@ int main() {
                 : "balance×pos_frac";
             spdlog::info(
                 "LIH config | leg1<={:.2f} target<={:.2f} entry={:.1f} mode={} dilute={:.2f} "
-                "leg1_min={:.0f}s hedge_min={:.0f}s force={:.0f}s leg1_cd={} rebal_cd={} "
-                "max_rebal_sh={} max_matched_sh={} slot_cap={} pause_after_round={} session_legs={}",
+                "leg1_min={:.0f}s hedge_min={:.0f}s force={:.0f}s trend_align={} lookback={:.0f}s "
+                "leg1_cd={} rebal_cd={} max_rebal_sh={} max_matched_sh={} slot_cap={} "
+                "pause_after_round={} session_legs={}",
                 lih_leg1_max, lih_target_combined, lih_leg1_shares,
                 lih_flex_rebalance ? "flex" : "standard",
                 lih_flex_dilute_ratio,
                 lih_leg1_min_secs, lih_min_secs,
                 lih_force_balance_secs,
+                lih_leg1_trend_align ? "on" : "off", lih_trend_lookback_sec,
                 lih_leg1_cooldown <= 0.0 ? "off" : fmt::format("{:.0f}s", lih_leg1_cooldown),
                 lih_rebalance_cooldown <= 0.0 ? "off" : fmt::format("{:.0f}s", lih_rebalance_cooldown),
                 max_rebal_str, max_matched_str, slot_cap_str,
@@ -1471,7 +1486,8 @@ int main() {
                             lih_leg1_cooldown, lih_rebalance_cooldown,
                             lih_use_mirror, lih_leg1_shares, lih_allow_over_target,
                             lih_force_balance_secs, lih_max_rebalance_shares,
-                            lih_flex_rebalance, lih_flex_dilute_ratio);
+                            lih_flex_rebalance, lih_flex_dilute_ratio,
+                            lih_leg1_trend_align, lih_trend_lookback_sec);
                     }
                     risk_manager.sync_lih_from_markets(all_m);
                 }
