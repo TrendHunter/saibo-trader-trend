@@ -813,6 +813,11 @@ static void apply_runtime_config(
                     std::lock_guard<std::mutex> lock(detector_mutex);
                     if (lih_detector) lih_detector->set_leg1_min_seconds_remaining(x);
                     store.push_telemetry(fmt::format("CONFIG LIH_LEG1_MIN_SECONDS_REMAINING={}", v));
+                } else if (k == "LIH_LEG1_START_DELAY_SEC") {
+                    const double x = std::stod(v);
+                    std::lock_guard<std::mutex> lock(detector_mutex);
+                    if (lih_detector) lih_detector->set_leg1_start_delay_sec(x);
+                    store.push_telemetry(fmt::format("CONFIG LIH_LEG1_START_DELAY_SEC={}", v));
                 } else if (k == "LIH_LEG1_SHARES") {
                     const double x = std::stod(v);
                     std::lock_guard<std::mutex> lock(detector_mutex);
@@ -1028,10 +1033,11 @@ int main() {
         }
         bool lih_use_mirror = env_flag_true(env, "LIH_USE_MIRROR", true);
         double lih_leg1_max = env.count("LIH_LEG1_MAX_PRICE") ? std::stod(env["LIH_LEG1_MAX_PRICE"]) : 0.45;
-        double lih_target_combined = env.count("LIH_TARGET_COMBINED") ? std::stod(env["LIH_TARGET_COMBINED"]) : 0.95;
+        double lih_target_combined = env.count("LIH_TARGET_COMBINED") ? std::stod(env["LIH_TARGET_COMBINED"]) : 0.94;
         double lih_min_secs = env.count("LIH_MIN_SECONDS_REMAINING") ? std::stod(env["LIH_MIN_SECONDS_REMAINING"]) : 15.0;
         double lih_leg1_min_secs = env.count("LIH_LEG1_MIN_SECONDS_REMAINING")
             ? std::stod(env["LIH_LEG1_MIN_SECONDS_REMAINING"]) : 30.0;
+        double lih_leg1_start_delay = env_double_or(env, "LIH_LEG1_START_DELAY_SEC", 7.0);
         double lih_leg1_cooldown = 20.0;
         double lih_rebalance_cooldown = 5.0;
         if (env.count("LIH_LEG1_COOLDOWN_SECONDS")) {
@@ -1068,14 +1074,14 @@ int main() {
         double lih_trend_lookback_sec = env.count("LIH_TREND_LOOKBACK_SEC")
             ? std::stod(env["LIH_TREND_LOOKBACK_SEC"]) : 60.0;
         double lih_endgame_secs = env.count("LIH_ENDGAME_SECS")
-            ? std::stod(env["LIH_ENDGAME_SECS"]) : lih_force_balance_secs;
+            ? std::stod(env["LIH_ENDGAME_SECS"]) : 100.0;
         double lih_endgame_hold_ask = env_double_or(env, "LIH_ENDGAME_HOLD_ASK", 0.90);
         double lih_endgame_resume_hedge_ask = env_double_or(env, "LIH_ENDGAME_RESUME_HEDGE_ASK", 0.89);
         double lih_endgame_soft_cap = env_double_or(env, "LIH_ENDGAME_SOFT_CAP", 1.15);
         double lih_endgame_step_small = env_double_or(env, "LIH_ENDGAME_STEP_SHARES_SMALL", 5.0);
         double lih_endgame_step_large = env_double_or(env, "LIH_ENDGAME_STEP_SHARES_LARGE", 10.0);
         double lih_endgame_gap_large = env_double_or(env, "LIH_ENDGAME_GAP_LARGE", 10.0);
-        double lih_endgame_override_secs = env_double_or(env, "LIH_ENDGAME_OVERRIDE_SECS", 20.0);
+        double lih_endgame_override_secs = env_double_or(env, "LIH_ENDGAME_OVERRIDE_SECS", 40.0);
         double lih_endgame_override_cooldown = env_double_or(env, "LIH_ENDGAME_OVERRIDE_COOLDOWN", 1.0);
         std::string mirror_path = env.count("LIVE_MIRROR_PATH") ? env["LIVE_MIRROR_PATH"] : "logs/live_mirror.json";
 
@@ -1134,12 +1140,12 @@ int main() {
                 ? fmt::format("${:.2f}", lih_max_usdc_per_slot)
                 : "balance×pos_frac";
             spdlog::info(
-                "LIH config | leg1<={:.2f} target<={:.2f} entry={:.1f} mode={} dilute={:.2f} "
+                "LIH config | leg1<={:.2f} target<={:.2f} entry={:.1f} leg1_delay={:.0f}s mode={} dilute={:.2f} "
                 "leg1_min={:.0f}s hedge_min={:.0f}s force={:.0f}s trend_align={} lookback={:.0f}s "
                 "endgame={:.0f}s hold>={:.2f} soft_cap={:.2f} step={:.0f}/{:.0f} override={:.0f}s "
                 "leg1_cd={} rebal_cd={} max_rebal_sh={} max_matched_sh={} slot_cap={} "
                 "pause_after_round={} session_legs={}",
-                lih_leg1_max, lih_target_combined, lih_leg1_shares,
+                lih_leg1_max, lih_target_combined, lih_leg1_shares, lih_leg1_start_delay,
                 lih_flex_rebalance ? "flex" : "standard",
                 lih_flex_dilute_ratio,
                 lih_leg1_min_secs, lih_min_secs,
@@ -1520,7 +1526,7 @@ int main() {
                     if (lih_enabled) {
                         lih_detector = std::make_unique<LegInHedgeDetector>(
                             store, all_m, lih_leg1_max, lih_target_combined, lih_min_secs,
-                            lih_leg1_min_secs,
+                            lih_leg1_min_secs, lih_leg1_start_delay,
                             lih_leg1_cooldown, lih_rebalance_cooldown,
                             lih_use_mirror, lih_leg1_shares, lih_allow_over_target,
                             lih_force_balance_secs, lih_max_rebalance_shares,

@@ -28,6 +28,7 @@ public:
                        double target_combined = 0.94,
                        double min_seconds_remaining = 15.0,
                        double leg1_min_seconds_remaining = 30.0,
+                       double leg1_start_delay_sec = 7.0,
                        double leg1_cooldown_seconds = 20.0,
                        double rebalance_cooldown_seconds = 5.0,
                        bool use_mirror_prices = true,
@@ -39,14 +40,14 @@ public:
                        double flex_dilute_ratio = 0.95,
                        bool leg1_trend_align = false,
                        double trend_lookback_sec = 60.0,
-                       double endgame_secs = 60.0,
+                       double endgame_secs = 100.0,
                        double endgame_hold_ask = 0.90,
                        double endgame_resume_hedge_ask = 0.89,
                        double endgame_soft_cap = 1.15,
                        double endgame_step_small = 5.0,
                        double endgame_step_large = 10.0,
                        double endgame_gap_large = 10.0,
-                       double endgame_override_secs = 20.0,
+                       double endgame_override_secs = 40.0,
                        double endgame_override_cooldown = 1.0);
 
     std::optional<LegInAction> evaluate(double now_ms, risk::RiskManager& rm);
@@ -60,6 +61,7 @@ public:
     void set_cooldown_seconds(double v) { leg1_cooldown_seconds_ = v; }
     void set_min_seconds_remaining(double v) { min_seconds_remaining_ = v; }
     void set_leg1_min_seconds_remaining(double v) { leg1_min_seconds_remaining_ = v; }
+    void set_leg1_start_delay_sec(double v) { leg1_start_delay_sec_ = v; }
     void set_use_mirror_prices(bool v) { use_mirror_prices_ = v; }
     void set_leg1_shares(double v) { leg1_shares_ = v; }
     void set_allow_over_target(bool v) { allow_over_target_ = v; }
@@ -109,6 +111,8 @@ private:
     double min_seconds_remaining_;
     /** No new leg1 when secs_left below this — wait for next window. */
     double leg1_min_seconds_remaining_;
+    /** No leg1 until this many seconds after window open (skip opening volatility). */
+    double leg1_start_delay_sec_;
     double leg1_cooldown_seconds_;
     double rebalance_cooldown_seconds_;
     bool use_mirror_prices_;

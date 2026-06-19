@@ -19,6 +19,7 @@ LegInHedgeDetector::LegInHedgeDetector(StateStore& store,
                                        double target_combined,
                                        double min_seconds_remaining,
                                        double leg1_min_seconds_remaining,
+                                       double leg1_start_delay_sec,
                                        double leg1_cooldown_seconds,
                                        double rebalance_cooldown_seconds,
                                        bool use_mirror_prices,
@@ -45,6 +46,7 @@ LegInHedgeDetector::LegInHedgeDetector(StateStore& store,
       target_combined_(target_combined),
       min_seconds_remaining_(min_seconds_remaining),
       leg1_min_seconds_remaining_(leg1_min_seconds_remaining),
+      leg1_start_delay_sec_(leg1_start_delay_sec),
       leg1_cooldown_seconds_(leg1_cooldown_seconds),
       rebalance_cooldown_seconds_(rebalance_cooldown_seconds),
       use_mirror_prices_(use_mirror_prices),
@@ -284,6 +286,12 @@ std::optional<LegInAction> LegInHedgeDetector::evaluate(double now_ms, risk::Ris
         }
 
         if (!open_lih) {
+            const double window_total_sec = market.window_minutes * 60.0;
+            const double elapsed = window_total_sec - secs_left;
+            if (leg1_start_delay_sec_ > 0.0 && elapsed < leg1_start_delay_sec_) {
+                log_entry_status(market, key, now_sec, q, "early window — wait volatility");
+                continue;
+            }
             if (secs_left < leg1_min_seconds_remaining_) {
                 log_entry_status(market, key, now_sec, q, "late window — wait next round");
                 continue;

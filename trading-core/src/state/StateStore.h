@@ -212,7 +212,7 @@ private:
     bool lih_enabled_ = true;
     bool lih_disable_dh_ = false;
     double lih_leg1_max_price_ = 0.45;
-    double lih_target_combined_ = 0.95;
+    double lih_target_combined_ = 0.94;
     bool lih_use_mirror_ = true;
     bool live_lih_dry_run_ = true;
     double trades_baseline_ts_ = 0.0;
