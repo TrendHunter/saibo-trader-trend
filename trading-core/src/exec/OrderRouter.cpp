@@ -1271,6 +1271,108 @@ bool OrderRouter::lih_pending_position_gone(const LihPendingFill& pending) const
     return open.find(pending.lih_id) == open.end();
 }
 
+bool OrderRouter::lih_has_live_pending(const LegInAction& act) const {
+    for (const auto& pending : lih_pending_fills_) {
+        if (pending.order_id.empty()) continue;
+        if (act.kind == LegInAction::Kind::OpenLeg1) {
+            if (pending.kind == LegInAction::Kind::OpenLeg1 &&
+                pending.market.asset == act.market.asset &&
+                pending.market.window_minutes == act.market.window_minutes) {
+                return true;
+            }
+            continue;
+        }
+        if (!act.lih_id.empty() && pending.lih_id == act.lih_id &&
+            (pending.kind == LegInAction::Kind::CompleteHedge ||
+             pending.kind == LegInAction::Kind::HeavyDilute)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void OrderRouter::drop_lih_pending_for(const LegInAction& act) {
+    lih_pending_fills_.erase(
+        std::remove_if(
+            lih_pending_fills_.begin(), lih_pending_fills_.end(),
+            [&](const LihPendingFill& pending) {
+                if (act.kind == LegInAction::Kind::OpenLeg1) {
+                    return pending.kind == LegInAction::Kind::OpenLeg1 &&
+                           pending.market.asset == act.market.asset &&
+                           pending.market.window_minutes == act.market.window_minutes;
+                }
+                return !act.lih_id.empty() && pending.lih_id == act.lih_id;
+            }),
+        lih_pending_fills_.end());
+}
+
+void OrderRouter::register_lih_from_pending(
+    const LihPendingFill& pending, const LegFillResult& fill, double now_sec) {
+    const char* side_label = pending.buy_yes ? "YES" : "NO";
+    switch (pending.kind) {
+    case LegInAction::Kind::OpenLeg1:
+        risk_manager_.register_lih_open_leg1(
+            pending.market, pending.buy_yes, fill.price, fill.size_shares, now_sec, false);
+        store_.push_signal(fmt::format(
+            "LIH LIVE LEG1 {} {} {:.2f}sh @ {:.4f} (pending resolved)",
+            pending.market.asset, side_label, fill.size_shares, fill.price));
+        spdlog::info("[LIVE LIH] LEG1 pending resolved {} {:.2f}sh order_id={}",
+                     pending.market.asset, fill.size_shares, pending.order_id);
+        break;
+    case LegInAction::Kind::CompleteHedge:
+    case LegInAction::Kind::HeavyDilute: {
+        const char* tag = pending.kind == LegInAction::Kind::HeavyDilute ? "DILUTE" : "HEDGE";
+        if (pending.lih_id.empty()) {
+            spdlog::error("[LIVE LIH] pending {} missing lih_id order_id={}", tag, pending.order_id);
+            return;
+        }
+        double reg_sh = fill.size_shares;
+        const auto open = risk_manager_.get_open_lih_positions();
+        const auto pit = open.find(pending.lih_id);
+        if (pit != open.end()) {
+            const double gap = std::abs(pit->second.yes_shares - pit->second.no_shares);
+            if (gap <= kFloatTol) {
+                spdlog::warn("[LIVE LIH] {} pending skip {} order_id={} — gap already 0",
+                             tag, pending.market.asset, pending.order_id);
+                return;
+            }
+            reg_sh = std::min(reg_sh, gap);
+        }
+        if (reg_sh <= kFloatTol) return;
+        risk_manager_.register_lih_add_leg(
+            pending.lih_id, pending.buy_yes, fill.price, reg_sh, false);
+        store_.push_signal(fmt::format(
+            "LIH LIVE {} {} {} {:.2f}sh @ {:.4f} (pending resolved)",
+            tag, pending.market.asset, side_label, reg_sh, fill.price));
+        spdlog::info("[LIVE LIH] {} pending resolved {} {:.2f}sh order_id={}",
+                     tag, pending.market.asset, reg_sh, pending.order_id);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+bool OrderRouter::lih_track_or_fail_live_order(
+    const LegInAction& act,
+    const std::string& token_id,
+    LegFillResult& fill,
+    double exec_px,
+    double shares,
+    double now_sec,
+    const char* tag) {
+    if (fill.success && fill.size_shares >= kMinFillShares) return false;
+    if (fill.order_id.empty()) return false;
+    track_lih_pending_fill(act, token_id, fill.order_id, exec_px, shares, now_sec);
+    spdlog::warn("[LIVE LIH] {} awaiting fill {} order_id={} — no retry until resolved",
+                 tag, act.market.asset, fill.order_id);
+    store_.push_telemetry(fmt::format(
+        "[LIH LIVE] {} pending {} | order_id={} | awaiting fill (no retry)",
+        tag, act.market.asset, fill.order_id));
+    fill.pending_fill = true;
+    return true;
+}
+
 void OrderRouter::track_lih_pending_fill(
     const trading::LegInAction& act,
     const std::string& token_id,
@@ -1279,6 +1381,11 @@ void OrderRouter::track_lih_pending_fill(
     double shares,
     double now_sec) {
     if (order_id.empty()) return;
+    if (lih_has_live_pending(act)) {
+        spdlog::warn("[LIVE LIH] pending already active {} {} — ignore order_id={}",
+                     act.market.asset, act.lih_id, order_id);
+        return;
+    }
     for (auto& pending : lih_pending_fills_) {
         if (pending.order_id == order_id) {
             pending.last_poll_sec = 0.0;
@@ -1304,8 +1411,8 @@ int OrderRouter::poll_lih_pending_fills(double now_sec) {
     if (paper_mode_ || live_lih_dry_run_ || lih_pending_fills_.empty()) return 0;
 
     constexpr double kPollIntervalSec = 1.0;
-    constexpr double kDeadAbandonSec = 15.0;
-    constexpr double kStaleAbandonSec = 45.0;
+    constexpr double kDeadAbandonSec = 45.0;
+    constexpr double kStaleAbandonSec = 120.0;
     int resolved = 0;
 
     for (auto it = lih_pending_fills_.begin(); it != lih_pending_fills_.end(); ) {
@@ -1326,42 +1433,19 @@ int OrderRouter::poll_lih_pending_fills(double now_sec) {
 
         LegFillResult fill = resolve_clob_fill(pending.token_id, pending.exec_px, pending.order_id, 0);
         if (fill.success && fill.size_shares >= kMinFillShares) {
-            const char* side_label = pending.buy_yes ? "YES" : "NO";
-            switch (pending.kind) {
-            case LegInAction::Kind::OpenLeg1:
-                risk_manager_.register_lih_open_leg1(
-                    pending.market, pending.buy_yes, fill.price, fill.size_shares, now_sec, false);
-                store_.push_signal(fmt::format(
-                    "LIH LIVE LEG1 {} {} {:.2f}sh @ {:.4f} (pending resolved)",
-                    pending.market.asset, side_label, fill.size_shares, fill.price));
-                spdlog::info("[LIVE LIH] LEG1 pending resolved {} {:.2f}sh order_id={}",
-                             pending.market.asset, fill.size_shares, pending.order_id);
-                break;
-            case LegInAction::Kind::CompleteHedge:
-            case LegInAction::Kind::HeavyDilute: {
-                const char* tag = pending.kind == LegInAction::Kind::HeavyDilute ? "DILUTE" : "HEDGE";
-                if (pending.lih_id.empty()) {
-                    spdlog::error("[LIVE LIH] pending {} missing lih_id order_id={}", tag, pending.order_id);
-                    abandon_lih_pending(pending, "missing lih_id");
+            const auto open = risk_manager_.get_open_lih_positions();
+            const auto pit = open.find(pending.lih_id);
+            if (pit != open.end() &&
+                (pending.kind == LegInAction::Kind::CompleteHedge ||
+                 pending.kind == LegInAction::Kind::HeavyDilute)) {
+                const double gap = std::abs(pit->second.yes_shares - pit->second.no_shares);
+                if (gap <= kFloatTol) {
+                    abandon_lih_pending(pending, "gap already closed");
                     it = lih_pending_fills_.erase(it);
                     continue;
                 }
-                risk_manager_.register_lih_add_leg(
-                    pending.lih_id, pending.buy_yes, fill.price, fill.size_shares, false);
-                store_.push_signal(fmt::format(
-                    "LIH LIVE {} {} {} {:.2f}sh @ {:.4f} (pending resolved)",
-                    tag, pending.market.asset, side_label, fill.size_shares, fill.price));
-                spdlog::info("[LIVE LIH] {} pending resolved {} {:.2f}sh order_id={}",
-                             tag, pending.market.asset, fill.size_shares, pending.order_id);
-                break;
             }
-            default:
-                spdlog::warn("[LIVE LIH] pending poll skip unsupported kind order_id={}", pending.order_id);
-                abandon_lih_pending(pending, "unsupported kind");
-                it = lih_pending_fills_.erase(it);
-                continue;
-            }
-
+            register_lih_from_pending(pending, fill, now_sec);
             it = lih_pending_fills_.erase(it);
             ++resolved;
             continue;
@@ -1441,6 +1525,10 @@ bool OrderRouter::submit_lih_action(const trading::LegInAction& act, double now_
                 cost, false, nullptr, 0.0, &act.market.asset, act.market.window_minutes).first) {
             return false;
         }
+        if (lih_has_live_pending(act)) {
+            spdlog::debug("[LIVE LIH] LEG1 skip {} — pending order in flight", act.market.asset);
+            return false;
+        }
 
         if (!risk_manager_.try_begin_lih_leg1(act.market.asset, act.market.window_minutes)) {
             spdlog::warn("[LIVE LIH] LEG1 blocked — in-flight or open {} {}m",
@@ -1469,30 +1557,21 @@ bool OrderRouter::submit_lih_action(const trading::LegInAction& act, double now_
                 fill.pending_fill = true;
             }
         }
-        if (fill.pending_fill) {
-            track_lih_pending_fill(act, tok, fill.order_id, exec_px, shares, now_sec);
-            spdlog::warn("[LIVE LIH] LEG1 uncertain fill {} order_id={} — tracking pending",
-                         act.market.asset, fill.order_id);
-            store_.push_telemetry(fmt::format(
-                "[LIH LIVE] LEG1 pending {} | order_id={} — awaiting fill confirm",
-                act.market.asset, fill.order_id));
+        if (fill.pending_fill || lih_track_or_fail_live_order(
+                act, tok, fill, exec_px, shares, now_sec, "LEG1")) {
             return false;
         }
         if (!fill.success || fill.size_shares < kMinFillShares) {
             risk_manager_.end_lih_leg1_inflight(act.market.asset, act.market.window_minutes);
-            if (!fill.order_id.empty()) {
-                spdlog::warn("[LIVE LIH] LEG1 dead/no fill {} order_id={} — lock released",
-                             act.market.asset, fill.order_id);
-            } else {
-                spdlog::error("[LIVE LIH] LEG1 buy failed {} (filled {:.4f})",
-                              act.market.asset, fill.size_shares);
-            }
+            spdlog::error("[LIVE LIH] LEG1 buy failed {} (filled {:.4f})",
+                          act.market.asset, fill.size_shares);
             return false;
         }
         if (fill.size_shares + kFloatTol < shares) {
             spdlog::warn("[LIVE LIH] LEG1 partial {:.2f}/{:.2f} {} — accepting fill",
                          fill.size_shares, shares, act.market.asset);
         }
+        drop_lih_pending_for(act);
         risk_manager_.register_lih_open_leg1(
             act.market, act.buy_yes, fill.price, fill.size_shares, now_sec, false);
         store_.push_signal(fmt::format("LIH LIVE LEG1 {} {} {:.2f}sh @ {:.4f} ({})",
@@ -1561,6 +1640,10 @@ bool OrderRouter::submit_lih_action(const trading::LegInAction& act, double now_
             return true;
         }
 
+        if (lih_has_live_pending(act)) {
+            spdlog::debug("[LIVE LIH] {} skip {} — pending hedge order in flight", tag, act.market.asset);
+            return false;
+        }
         if (act.lih_id.empty() || !risk_manager_.try_begin_lih_rebalance(act.lih_id)) {
             spdlog::warn("[LIVE LIH] {} blocked — rebalance in-flight or missing lih_id {}",
                          tag, act.lih_id);
@@ -1580,30 +1663,21 @@ bool OrderRouter::submit_lih_action(const trading::LegInAction& act, double now_
                 fill.pending_fill = true;
             }
         }
-        if (fill.pending_fill) {
-            track_lih_pending_fill(act, tok, fill.order_id, exec_px, shares, now_sec);
-            spdlog::warn("[LIVE LIH] {} uncertain fill {} order_id={} — tracking pending",
-                         tag, act.market.asset, fill.order_id);
-            store_.push_telemetry(fmt::format(
-                "[LIH LIVE] {} pending {} | order_id={} — awaiting fill confirm",
-                tag, act.market.asset, fill.order_id));
+        if (fill.pending_fill || lih_track_or_fail_live_order(
+                act, tok, fill, exec_px, shares, now_sec, tag)) {
             return false;
         }
         if (!fill.success || fill.size_shares < kMinFillShares) {
             risk_manager_.end_lih_rebalance_inflight(act.lih_id);
-            if (!fill.order_id.empty()) {
-                spdlog::warn("[LIVE LIH] {} dead/no fill {} order_id={} — lock released, will retry",
-                             tag, act.market.asset, fill.order_id);
-            } else {
-                spdlog::error("[LIVE LIH] {} failed {} (filled {:.4f}/{:.4f})",
-                              tag, act.market.asset, fill.size_shares, shares);
-            }
+            spdlog::error("[LIVE LIH] {} failed {} (filled {:.4f}/{:.4f})",
+                          tag, act.market.asset, fill.size_shares, shares);
             return false;
         }
         if (fill.size_shares + kFloatTol < shares) {
             spdlog::warn("[LIVE LIH] {} partial {:.2f}/{:.2f} {} — accepting fill",
                          tag, fill.size_shares, shares, act.market.asset);
         }
+        drop_lih_pending_for(act);
         risk_manager_.register_lih_add_leg(act.lih_id, act.buy_yes, fill.price, fill.size_shares, false);
         store_.push_signal(fmt::format("LIH LIVE {} {} {} {:.2f}sh @ {:.4f} ({})",
             tag, act.market.asset, side_label, fill.size_shares, fill.price, act.note));

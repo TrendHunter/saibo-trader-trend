@@ -74,6 +74,7 @@ public:
     int poll_lih_pending_fills(double now_sec);
 
     bool live_lih_dry_run() const { return live_lih_dry_run_; }
+    void set_live_lih_dry_run(bool v) { live_lih_dry_run_ = v; }
 
     bool submit_order(const std::string& token_id, 
                       double price, 
@@ -140,6 +141,19 @@ private:
         double now_sec);
     void abandon_lih_pending(const LihPendingFill& pending, const char* reason);
     bool lih_pending_position_gone(const LihPendingFill& pending) const;
+    /** True if a live CLOB order is still awaiting fill confirmation (blocks retry). */
+    bool lih_has_live_pending(const trading::LegInAction& act) const;
+    void drop_lih_pending_for(const trading::LegInAction& act);
+    void register_lih_from_pending(const LihPendingFill& pending, const LegFillResult& fill, double now_sec);
+    /** Track order_id when POST returned no immediate fill — keeps inflight lock, no retry. */
+    bool lih_track_or_fail_live_order(
+        const trading::LegInAction& act,
+        const std::string& token_id,
+        LegFillResult& fill,
+        double exec_px,
+        double shares,
+        double now_sec,
+        const char* tag);
     
     std::unique_ptr<EIP712Signer> signer_;
     std::unique_ptr<EIP712Signer> signer_neg_risk_;

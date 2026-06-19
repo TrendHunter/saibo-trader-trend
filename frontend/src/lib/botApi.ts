@@ -36,7 +36,11 @@ export async function fetchBotConfig() {
   return botFetch("/api/config") as Promise<{ config: BotConfig; live: Record<string, unknown> }>;
 }
 
-export async function updateBotConfig(patch: Record<string, string | number>, user: string) {
+export async function updateBotConfig(
+  patch: Record<string, string | number>,
+  user: string,
+  options?: { action?: "pause" | "resume" | "reset_kill"; reason?: string }
+) {
   const normalized: Record<string, string> = {};
   for (const [k, v] of Object.entries(patch)) {
     if (v === undefined || v === null) continue;
@@ -46,13 +50,37 @@ export async function updateBotConfig(patch: Record<string, string | number>, us
     }
     normalized[k] = text;
   }
-  if (!Object.keys(normalized).length) {
+  if (!Object.keys(normalized).length && !options?.action) {
     throw new Error("没有可保存的配置项");
+  }
+  const body: Record<string, unknown> = { user };
+  if (Object.keys(normalized).length) body.patch = normalized;
+  if (options?.action) {
+    body.action = options.action;
+    if (options.reason) body.reason = options.reason;
   }
   return botFetch("/api/config", {
     method: "POST",
-    body: JSON.stringify({ patch: normalized, user }),
-  }) as Promise<{ ok: boolean; applied: Record<string, string> }>;
+    body: JSON.stringify(body),
+  }) as Promise<{ ok: boolean; applied: Record<string, string>; action?: string | null }>;
+}
+
+export type TradingMode = "stopped" | "shadow" | "live";
+
+export async function setTradingMode(mode: TradingMode, user: string) {
+  if (mode === "stopped") {
+    return updateBotConfig({}, user, { action: "pause", reason: "Web: 停止新开仓" });
+  }
+  if (mode === "shadow") {
+    return updateBotConfig({ LIVE_LIH_DRY_RUN: "true" }, user, {
+      action: "resume",
+      reason: "Web: Shadow 运行",
+    });
+  }
+  return updateBotConfig({ LIVE_LIH_DRY_RUN: "false" }, user, {
+    action: "resume",
+    reason: "Web: 实盘运行",
+  });
 }
 
 export async function botControl(action: "pause" | "resume" | "reset_kill", user: string, reason?: string) {

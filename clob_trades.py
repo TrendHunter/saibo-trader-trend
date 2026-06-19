@@ -186,3 +186,60 @@ def fetch_user_trades(
             }
         )
     return fills
+
+
+def fetch_user_positions(
+    funder_address: str | None = None,
+    *,
+    limit: int = 500,
+    size_threshold: float = 0.01,
+) -> list[dict[str, Any]]:
+    """Return open CTF positions from Polymarket Data API (chain truth for share sizes)."""
+    funder = (funder_address or os.getenv("POLYMARKET_FUNDER", "")).strip()
+    if not funder:
+        return []
+    user = funder if funder.startswith("0x") else f"0x{funder}"
+    params = urllib.parse.urlencode(
+        {
+            "user": user.lower(),
+            "limit": min(max(limit, 1), 500),
+            "sizeThreshold": max(size_threshold, 0.0),
+        }
+    )
+    url = f"{DATA_API}/positions?{params}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "polymarket-bot/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read().decode("utf-8")
+    except Exception as exc:
+        return [{"error": str(exc)}]
+
+    import json
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return [{"error": f"invalid JSON: {exc}"}]
+
+    if not isinstance(parsed, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for row in parsed:
+        if not isinstance(row, dict):
+            continue
+        size = float(row.get("size") or 0)
+        if size <= 0:
+            continue
+        title = str(row.get("title") or row.get("question") or "")
+        out.append(
+            {
+                "asset": str(row.get("asset") or row.get("tokenId") or row.get("tokenID") or ""),
+                "conditionId": str(row.get("conditionId") or ""),
+                "size": size,
+                "outcome": str(row.get("outcome") or ""),
+                "title": title,
+                "windowMinutes": _infer_window_minutes(title),
+                "asset_label": _infer_asset(title),
+            }
+        )
+    return out

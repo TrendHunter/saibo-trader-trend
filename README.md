@@ -20,9 +20,10 @@ Polymarket **5m / 15m Up-Down** 市场（BTC / ETH / SOL）自动交易。主策
 | **Leg1** | 某侧 ask ≤ `LIH_LEG1_MAX_PRICE`（默认 0.45） | 买 Up 或 Down 中更便宜的一侧 |
 | **对冲** | `已买边均价 + 对面 ask ≤ LIH_TARGET_COMBINED`（默认 **0.95**） | 买对面配平 |
 | **结算** | 市场到期 | `AUTO_REDEEM=true` 时自动链上 redeem |
-| **暂停** | `LIH_PAUSE_AFTER_ROUND=true` | leg1+对冲完成或窗口结算后自动 PAUSE；Web 点「恢复」开下一局（session 清零） |
+| **连续运行** | 默认 `LIH_PAUSE_AFTER_ROUND=false` | 每局结算后自动清零 session，继续等新 leg1 |
+| **单轮调试** | `LIH_PAUSE_AFTER_ROUND=true` + `LIH_SESSION_MAX_LEGS>0` | 需在 `RiskManager.cpp` 取消 DEBUG 注释块后生效；Web「恢复」开下一局 |
 
-保守实盘默认：全局单槽（`LIH_ONE_SLOT_GLOBAL`）、每局最多 2 腿（leg1+对冲）、余额低于 $10 不开 leg1、窗口最后 30s 不开新 leg1。
+保守实盘默认：全局单槽（`LIH_ONE_SLOT_GLOBAL`）、余额低于 $10 不开 leg1、窗口最后 30s 不开新 leg1。
 
 ### Leg1 / 对冲锁（不留尾巴）
 

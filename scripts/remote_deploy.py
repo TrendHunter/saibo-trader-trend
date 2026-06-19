@@ -1707,9 +1707,9 @@ print("patched", len(updates), "keys")
             env_fixes = [
                 ("RISK_MAX_CONCURRENT_POSITIONS", "1"),
                 ("LIH_TARGET_COMBINED", "0.95"),
-                ("LIH_PAUSE_AFTER_ROUND", "true"),
+                ("LIH_PAUSE_AFTER_ROUND", "false"),
                 ("LIH_ONE_SLOT_GLOBAL", "true"),
-                ("LIH_SESSION_MAX_LEGS", "2"),
+                ("LIH_SESSION_MAX_LEGS", "0"),
             ]
             steps = [
                 f"cd '{PROJ}' && .venv/bin/python -c \"import json; p='logs/live_state.json'; d=json.load(open(p)); d['lih_leg1_inflight']=[]; json.dump(d,open(p,'w')); print('cleared inflight')\"",

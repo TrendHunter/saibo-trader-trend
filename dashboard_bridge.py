@@ -387,13 +387,27 @@ class ConfigHTTPHandler(BaseHTTPRequestHandler):
 
             if path == "/api/config":
                 patch = body.get("patch") or {}
-                if not isinstance(patch, dict) or not patch:
-                    _json_response(self, 400, {"error": "patch object required"})
+                action = str(body.get("action") or "").lower().strip()
+                reason = _sanitize_audit_reason(str(body.get("reason") or ""))
+                if not isinstance(patch, dict):
+                    _json_response(self, 400, {"error": "patch must be an object"})
                     return
-                applied = update_env(patch)
-                append_audit({"type": "config", "user": user, "patch": applied})
-                write_runtime_config({"patch": applied, "user": user})
-                _json_response(self, 200, {"ok": True, "applied": applied})
+                if not patch and action not in ("pause", "resume", "reset_kill"):
+                    _json_response(self, 400, {"error": "patch or action required"})
+                    return
+                payload: dict = {"user": user}
+                applied: dict = {}
+                if patch:
+                    applied = update_env(patch)
+                    payload["patch"] = applied
+                    append_audit({"type": "config", "user": user, "patch": applied})
+                if action in ("pause", "resume", "reset_kill"):
+                    payload["control"] = action
+                    if reason:
+                        payload["reason"] = reason
+                    append_audit({"type": "control", "user": user, "action": action, "reason": reason})
+                write_runtime_config(payload)
+                _json_response(self, 200, {"ok": True, "applied": applied, "action": action or None})
 
             elif path == "/api/control":
                 action = str(body.get("action") or "").lower()
@@ -475,7 +489,7 @@ def _live_maintenance_loop() -> None:
                 "no",
                 "off",
             )
-            recon_enabled = os.getenv("LIVE_LIH_RECONCILE_ENABLED", "false").lower() not in (
+            recon_enabled = os.getenv("LIVE_LIH_RECONCILE_ENABLED", "true").lower() not in (
                 "false",
                 "0",
                 "no",

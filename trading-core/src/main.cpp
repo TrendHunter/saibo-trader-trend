@@ -22,6 +22,7 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <fmt/core.h>
 #include <atomic>
+#include <cstdlib>
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
 #include <boost/json.hpp>
@@ -198,7 +199,7 @@ static bool env_flag_true(const std::unordered_map<std::string, std::string>& en
     std::string v = it->second;
     std::transform(v.begin(), v.end(), v.begin(), ::tolower);
     if (v == "false" || v == "0" || v == "no" || v == "off") return false;
-    if (v == "true" || v == "1" || v == "yes" || v == "on") return
+    if (v == "true" || v == "1" || v == "yes" || v == "on") return true;
     return default_val;
 }
 
@@ -279,7 +280,7 @@ static bool verify_venv_web3() {
         "print('ok')\""));
     if (out == "ok") {
         spdlog::info("venv web3 OK ({})", g_python_bin);
-        return
+        return true;
     }
     spdlog::critical(
         "venv web3 MISSING ({}) — output: {} | fix: .venv/bin/pip install 'web3>=6,<8'",
@@ -561,33 +562,63 @@ static bool apply_dh_asset_config(StateStore& store, const std::string& k, const
     if (k == "DH_ENABLE_5M_BTC") {
         store.set_dh_asset_enabled(5, "btc", enabled);
         store.push_telemetry(fmt::format("CONFIG DH_ENABLE_5M_BTC={}", enabled ? "true" : "false"));
-        return
+        return true;
     }
     if (k == "DH_ENABLE_5M_ETH") {
         store.set_dh_asset_enabled(5, "eth", enabled);
         store.push_telemetry(fmt::format("CONFIG DH_ENABLE_5M_ETH={}", enabled ? "true" : "false"));
-        return
+        return true;
     }
     if (k == "DH_ENABLE_5M_SOL") {
         store.set_dh_asset_enabled(5, "sol", enabled);
         store.push_telemetry(fmt::format("CONFIG DH_ENABLE_5M_SOL={}", enabled ? "true" : "false"));
-        return
+        return true;
     }
     if (k == "DH_ENABLE_15M_BTC") {
         store.set_dh_asset_enabled(15, "btc", enabled);
         store.push_telemetry(fmt::format("CONFIG DH_ENABLE_15M_BTC={}", enabled ? "true" : "false"));
-        return
+        return true;
     }
     if (k == "DH_ENABLE_15M_ETH") {
         store.set_dh_asset_enabled(15, "eth", enabled);
         store.push_telemetry(fmt::format("CONFIG DH_ENABLE_15M_ETH={}", enabled ? "true" : "false"));
-        return
+        return true;
     }
     return false;
 }
 
 // 实盘 LIH 快照路径（供 reload_lih_state 控制指令使用）
 static std::string g_live_state_reload_path;
+
+// 链上持仓对齐：后台跑 live_lih_reconcile.py 并 reload 快照
+// fast_positions_only=true → --positions-only（仅 Data API 持仓，~1s，成交后触发）
+// fast_positions_only=false → --merge（成交历史 + 持仓，兜底）
+static void try_live_chain_reconcile_async(
+    risk::RiskManager& risk_manager,
+    const std::string& live_path,
+    bool fast_positions_only = false) {
+    static std::atomic<bool> running{false};
+    static std::atomic<int64_t> last_reconcile_ms{0};
+    constexpr int64_t kMinGapMs = 2500;
+    const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (now_ms - last_reconcile_ms.load() < kMinGapMs) return;
+    if (running.exchange(true)) return;
+    last_reconcile_ms.store(now_ms);
+    const std::string script_args = fast_positions_only ? "--positions-only" : "--merge";
+    std::thread([&risk_manager, live_path, script_args]() {
+        const std::string cmd = python_script_cmd("scripts/live_lih_reconcile.py", script_args);
+        const int rc = std::system(cmd.c_str());
+        if (rc == 0) {
+            if (persistence::load_live_lih_state(risk_manager, live_path, false)) {
+                spdlog::info("Chain reconcile ({}) reloaded {}", script_args, live_path);
+            }
+        } else {
+            spdlog::warn("Chain reconcile {} failed (exit {})", script_args, rc);
+        }
+        running.store(false);
+    }).detach();
+}
 
 // --- 10. Web 热更新：读取 logs/runtime_config.json，应用 pause/resume/参数 patch 后删除 ---
 static void apply_runtime_config(
@@ -624,15 +655,33 @@ static void apply_runtime_config(
             store.push_telemetry(fmt::format("CONFIG PAUSE | {}", reason));
         } else if (action == "resume") {
             if (std::filesystem::exists("logs/STOP_TRADING")) {
-                store.push_telemetry("CONFIG RESUME blocked | logs/STOP_TRADING flag set");
-                spdlog::warn("Resume blocked: logs/STOP_TRADING flag is set");
+                std::error_code ec;
+                std::filesystem::remove("logs/STOP_TRADING", ec);
+                if (ec) {
+                    store.push_telemetry("CONFIG RESUME blocked | cannot clear STOP_TRADING");
+                    spdlog::warn("Resume blocked: failed to clear logs/STOP_TRADING ({})", ec.message());
+                } else {
+                    spdlog::info("Resume: cleared logs/STOP_TRADING (explicit Web resume)");
+                }
+            }
+            if (std::filesystem::exists("logs/STOP_TRADING")) {
+                // Still present after remove attempt — do not resume.
             } else if (risk_manager.resume()) {
-                if (risk_manager.get_lih_pause_after_round()) {
-                    risk_manager.reset_lih_session();
+                risk_manager.reset_lih_session();
+                if (risk_manager.get_max_concurrent_positions() <= 0) {
+                    const auto env_now = load_env(".env");
+                    if (env_now.count("RISK_MAX_CONCURRENT_POSITIONS")) {
+                        const int env_max = std::stoi(env_now.at("RISK_MAX_CONCURRENT_POSITIONS"));
+                        if (env_max > 0) {
+                            risk_manager.set_max_concurrent_positions(env_max);
+                            store.push_telemetry(
+                                fmt::format("CONFIG RESUME | restored RISK_MAX_CONCURRENT_POSITIONS={}", env_max));
+                        }
+                    }
                 }
                 const std::string msg = risk_manager.get_lih_pause_after_round()
-                    ? "CONFIG RESUME | trading enabled, LIH session reset"
-                    : "CONFIG RESUME | trading enabled";
+                    ? "CONFIG RESUME | trading enabled, LIH session reset (debug pause mode)"
+                    : "CONFIG RESUME | trading enabled, LIH session reset";
                 store.push_telemetry(msg);
             }
         } else if (action == "reset_kill") {
@@ -686,16 +735,16 @@ static void apply_runtime_config(
                     store.push_telemetry(fmt::format("CONFIG FEE_RATE={}", v));
                 } else if (k == "DH_SUM_TARGET") {
                     sum_target = std::stod(v);
-                    dh_changed =
+                    dh_changed = true;
                 } else if (k == "DH_MIN_DISCOUNT") {
                     min_discount = std::stod(v);
-                    dh_changed =
+                    dh_changed = true;
                 } else if (k == "DH_COOLDOWN_SECONDS") {
                     cooldown = std::stod(v);
-                    dh_changed =
+                    dh_changed = true;
                 } else if (k == "DH_MIN_SECONDS_REMAINING") {
                     min_secs = std::stod(v);
-                    dh_changed =
+                    dh_changed = true;
                 } else if (k == "BINANCE_FEED_ENABLED") {
                     bool enabled = parse_config_bool(v);
                     store.set_binance_feed_enabled(enabled);
@@ -906,6 +955,7 @@ int main() {
         int clob_bridge_port = env.count("CLOB_BRIDGE_PORT") ? std::stoi(env["CLOB_BRIDGE_PORT"]) : 8081;
         std::string clob_bridge_path = env.count("CLOB_BRIDGE_PATH") ? env["CLOB_BRIDGE_PATH"] : "/internal/clob/order";
         const int wallet_sync_interval_sec = env_int(env, "WALLET_SYNC_INTERVAL_SEC", 2, 1, 120);
+        const int lih_chain_reconcile_sec = env_int(env, "LIH_CHAIN_RECONCILE_SEC", 10, 5, 600);
         const int gamma_market_refresh_sec = env_int(env, "GAMMA_MARKET_REFRESH_SEC", 5, 3, 120);
 
         spdlog::info("Starting Core v3.0 (LIH) | Mode: {} | Bal: ${:.2f} | Auto-redeem: {} | DH dry-run: {} | LIH dry-run: {} | wallet_sync={}s | gamma_refresh={}s",
@@ -970,7 +1020,8 @@ int main() {
         bool lih_one_slot_global = env_flag_true(env, "LIH_ONE_SLOT_GLOBAL", max_concurrent <= 1);
         int lih_session_max_legs = env.count("LIH_SESSION_MAX_LEGS")
             ? std::stoi(env["LIH_SESSION_MAX_LEGS"]) : 2;
-        bool lih_pause_after_round = env_flag_true(env, "LIH_PAUSE_AFTER_ROUND", lih_enabled);
+        // Default false: continuous live trading. Set LIH_PAUSE_AFTER_ROUND=true for debug rounds.
+        bool lih_pause_after_round = env_flag_true(env, "LIH_PAUSE_AFTER_ROUND", false);
         double lih_min_balance_usdc = env.count("LIH_MIN_BALANCE_USDC")
             ? std::stod(env["LIH_MIN_BALANCE_USDC"]) : 10.0;
         std::string lih_rebalance_mode = env.count("LIH_REBALANCE_MODE") ? env["LIH_REBALANCE_MODE"] : "flex";
@@ -983,7 +1034,7 @@ int main() {
         const std::string strategy = lih_enabled ? "leg_in" : "dump_hedge";
 
         // --- H. Market feeds & optional depth/slippage sim (legacy) ---
-        bool binance_feed_enabled =
+        bool binance_feed_enabled = true;
         if (env.count("BINANCE_FEED_ENABLED")) {
             std::string bf = env["BINANCE_FEED_ENABLED"];
             std::transform(bf.begin(), bf.end(), bf.begin(), ::tolower);
@@ -1104,15 +1155,18 @@ int main() {
             store.push_telemetry(fmt::format("LEGACY LA CLOSED | {} position(s)", legacy_la));
         }
 
-        // --- L. 启动保护：logs/STOP_TRADING 强制暂停；恢复持久化的 PAUSED 状态 ---
-        if (std::filesystem::exists("logs/STOP_TRADING")) {
-            risk_manager.pause("STOP_TRADING flag — remove file to allow resume");
-            store.push_telemetry("STARTUP PAUSED | logs/STOP_TRADING");
-            spdlog::warn("Startup: trading forced PAUSED (logs/STOP_TRADING)");
-        } else if (risk_manager.get_status() == risk::TradingStatus::PAUSED) {
-            const auto reason = risk_manager.get_status_reason();
-            spdlog::warn("Startup: trading remains PAUSED ({})",
-                         reason.value_or("persisted state"));
+        // --- L. 启动保护：任何进程重启默认 PAUSED，仅 Web 手动 resume 可开交易 ---
+        {
+            std::filesystem::create_directories("logs");
+            {
+                std::ofstream stop_flag("logs/STOP_TRADING", std::ios::out | std::ios::trunc);
+                if (stop_flag) stop_flag << "1\n";
+            }
+            constexpr const char* kStartupPauseReason =
+                "startup — manual Web resume required";
+            risk_manager.pause(kStartupPauseReason);
+            store.push_telemetry("STARTUP PAUSED | manual Web resume required");
+            spdlog::warn("Startup: trading forced PAUSED (restart never auto-trades)");
         }
 
         // --- M. Push risk/strategy params into StateStore for telemetry ---
@@ -1182,6 +1236,7 @@ int main() {
                 const bool ok = router.submit_lih_action(act, now_sec);
                 if (ok && lih_enabled && live_state_persist && !live_lih_dry_run) {
                     persistence::save_live_lih_state(risk_manager, live_state_path, false);
+                    try_live_chain_reconcile_async(risk_manager, live_state_path, true);
                 }
                 return;
             }
@@ -1482,6 +1537,7 @@ int main() {
         auto last_binance_rest = std::chrono::system_clock::now() - std::chrono::seconds(10);
         bool rest_fallback_logged = false;
         auto last_live_save = std::chrono::system_clock::now();
+        auto last_chain_reconcile = std::chrono::system_clock::now();
         auto last_rest_book_poll = std::chrono::system_clock::now() - std::chrono::seconds(5);
         std::atomic<bool> rest_book_refreshing{false};
 
@@ -1519,7 +1575,7 @@ int main() {
                 if (!btc || btc->price <= 0) {
                     if (!rest_fallback_logged) {
                         spdlog::warn("Binance WS unavailable — using REST price polling");
-                        rest_fallback_logged =
+                        rest_fallback_logged = true;
                     }
                     poll_binance_rest();
                 }
@@ -1535,11 +1591,17 @@ int main() {
                     const int pending_resolved = router.poll_lih_pending_fills(now_sec_loop);
                     if (pending_resolved > 0 && live_state_persist) {
                         persistence::save_live_lih_state(risk_manager, live_state_path, false);
+                        try_live_chain_reconcile_async(risk_manager, live_state_path, true);
                     }
                 }
                 risk_manager.scrub_lih_inflight_locks(now_sec_loop);
                 check_and_close_lih_positions(risk_manager, store, gamma, auto_redeem);
                 try_lih_evaluate(); // 主循环也跑 LIH（不依赖 tick）
+            }
+            if (lih_enabled && live_state_persist && !live_lih_dry_run && !paper_mode
+                && loop_start - last_chain_reconcile > std::chrono::seconds(lih_chain_reconcile_sec)) {
+                last_chain_reconcile = loop_start;
+                try_live_chain_reconcile_async(risk_manager, live_state_path, false);
             }
             if (lih_enabled && live_state_persist && !live_lih_dry_run
                 && loop_start - last_live_save > std::chrono::seconds(10)) {

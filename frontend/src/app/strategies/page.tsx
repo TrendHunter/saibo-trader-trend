@@ -19,6 +19,20 @@ import { useCallback, useEffect, useState } from "react";
 import { useLiveState } from "@/hooks/useLiveState";
 import { isLihPrimary } from "@/lib/strategyMode";
 
+type TradingMode = "stopped" | "shadow" | "live";
+
+function deriveTradingMode(live: ReturnType<typeof useLiveState>): TradingMode {
+  if (!live.botStreamConnected || live.status !== 0) return "stopped";
+  if (live.liveLihDryRun === false) return "live";
+  return "shadow";
+}
+
+const TRADING_MODE_LABEL: Record<TradingMode, string> = {
+  stopped: "停止",
+  shadow: "Shadow 运行",
+  live: "实盘运行",
+};
+
 const ASSET_KEYS_5M = {
   BTC: "DH_ENABLE_5M_BTC",
   ETH: "DH_ENABLE_5M_ETH",
@@ -169,8 +183,7 @@ export default function StrategiesPage() {
   const [dhSumTarget, setDhSumTarget] = useState("0.95");
   const [dhMinDiscount, setDhMinDiscount] = useState("0.03");
 
-  const botActive =
-    live.botStreamConnected && live.status === 0;
+  const tradingMode = deriveTradingMode(live);
   const controlsDisabled =
     loading || live.status === 2 || !live.botStreamConnected;
 
@@ -226,21 +239,57 @@ export default function StrategiesPage() {
     }
   };
 
-  const toggleBot = async (enabled: boolean) => {
+  const applyTradingMode = async (mode: TradingMode) => {
+    if (mode === tradingMode) return;
+    if (mode === "live") {
+      const ok = window.confirm(
+        "确认开启实盘运行？\n\nBot 将向 Polymarket CLOB 发送真实订单并动用钱包资金。"
+      );
+      if (!ok) return;
+    }
     setLoading(true);
     setMessage("");
     try {
+      const patch: Record<string, string> = {};
+      if (mode === "shadow") {
+        patch.LIVE_LIH_DRY_RUN = "true";
+      } else if (mode === "live") {
+        patch.LIVE_LIH_DRY_RUN = "false";
+      }
+      if ((mode === "shadow" || mode === "live") && live.riskMaxConcurrentPositions <= 0) {
+        const cfgRes = await fetch("/api/bot/config");
+        const cfgData = cfgRes.ok
+          ? ((await cfgRes.json()) as { config?: Record<string, string> })
+          : { config: {} };
+        const envMax = parseInt(cfgData.config?.RISK_MAX_CONCURRENT_POSITIONS ?? "0", 10);
+        const restore = envMax > 0 ? envMax : 1;
+        patch.RISK_MAX_CONCURRENT_POSITIONS = String(restore);
+      }
+
+      let body: Record<string, unknown>;
+      if (mode === "stopped") {
+        body = { action: "pause", reason: "Web: 停止新开仓" };
+      } else if (mode === "shadow") {
+        body = {
+          patch,
+          action: "resume",
+          reason: "Web: Shadow 运行",
+        };
+      } else {
+        body = {
+          patch,
+          action: "resume",
+          reason: "Web: 实盘运行",
+        };
+      }
       const res = await fetch("/api/bot/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: enabled ? "resume" : "pause",
-          reason: enabled ? "LIH enabled via web" : "LIH paused via web",
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "操作失败");
-      setMessage(enabled ? "Bot 已恢复运行" : "Bot 已暂停新开仓");
+      setMessage(`已切换为：${TRADING_MODE_LABEL[mode]}`);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "操作失败");
     } finally {
@@ -285,21 +334,50 @@ export default function StrategiesPage() {
         <div className="mb-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-2.5 text-[13px] text-emerald-200/90">
           主策略：<span className="font-mono font-bold">{lihMode ? "LIH" : "DH（遗留）"}</span>
           {" · "}
-          模式：<span className="font-mono">{live.liveLihDryRun !== false ? "Shadow" : "实盘"}</span>
-          {" · "}
-          状态：
-          <span className="font-mono">
-            {!live.botStreamConnected
-              ? live.statusReason || "Bot 未连接"
-              : live.statusReason || (botActive ? "运行中" : "已暂停")}
-          </span>
-          {live.liveLihDryRun !== false && lihMode && (
-            <span className="ml-2 text-amber-200/90">（验簿不发单）</span>
+          当前：<span className="font-mono font-bold">{TRADING_MODE_LABEL[tradingMode]}</span>
+          {live.statusReason && live.status !== 0 && (
+            <span className="ml-2 text-white/50">（{live.statusReason}）</span>
           )}
-          {live.liveLihDryRun === false && lihMode && (
-            <span className="ml-2 text-emerald-200/90">（已关闭 dry-run，会真下单）</span>
+          {!live.botStreamConnected && (
+            <span className="ml-2 text-amber-200/90">Bot 未连接</span>
           )}
         </div>
+
+        <GlassCard className="mb-5">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base font-semibold text-white/90">交易运行模式</CardTitle>
+            <CardDescription className="text-white/40 text-[13px]">
+              三档合一：停止 / Shadow（验簿不发单）/ 实盘（真下单）。写入 <code className="text-white/50">LIVE_LIH_DRY_RUN</code> 并同步运行状态。
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {(["stopped", "shadow", "live"] as TradingMode[]).map((mode) => (
+                <Button
+                  key={mode}
+                  type="button"
+                  variant={tradingMode === mode ? "default" : "outline"}
+                  disabled={controlsDisabled}
+                  className={
+                    tradingMode === mode
+                      ? mode === "live"
+                        ? "bg-emerald-600 hover:bg-emerald-500"
+                        : mode === "shadow"
+                          ? "bg-amber-600 hover:bg-amber-500"
+                          : ""
+                      : "border-white/15 bg-white/5 text-white/80"
+                  }
+                  onClick={() => void applyTradingMode(mode)}
+                >
+                  {TRADING_MODE_LABEL[mode]}
+                </Button>
+              ))}
+            </div>
+            <p className="mt-3 text-[12px] text-white/40 leading-relaxed">
+              「停止」仅暂停新开仓，已有持仓保留。重启 bot 后默认暂停，需在下方选择 Shadow/实盘 并点「开始」才会交易（会自动清除 <code className="text-white/45">logs/STOP_TRADING</code>）。
+            </p>
+          </CardContent>
+        </GlassCard>
 
         <GlassCard>
           <CardHeader>
@@ -324,14 +402,6 @@ export default function StrategiesPage() {
                   patchConfig({ LIH_ENABLED: checked ? "true" : "false" }, checked ? "已启用 LIH" : "已切换为 DH 模式")
                 }
               />
-            </div>
-
-            <div className="flex items-center justify-between">
-              <Label htmlFor="bot-run" className="flex flex-col space-y-1">
-                <span className="font-semibold text-white/90 text-[14px]">运行 / 暂停</span>
-                <span className="font-normal text-white/40 text-[12px]">暂停后不再新开仓，已有持仓保留。</span>
-              </Label>
-              <Switch id="bot-run" checked={botActive} disabled={controlsDisabled} onCheckedChange={toggleBot} />
             </div>
 
             <div className="flex items-center justify-between py-1">

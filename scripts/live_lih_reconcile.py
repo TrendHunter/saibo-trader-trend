@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 
 load_dotenv(ROOT / ".env")
 
-from clob_trades import fetch_user_trades, parse_market_end_ts  # noqa: E402
+from clob_trades import fetch_user_trades, fetch_user_positions, parse_market_end_ts  # noqa: E402
 
 
 def _outcome_side(outcome: str) -> str:
@@ -213,6 +213,51 @@ def _drop_stale_recon(open_lih: dict, fresh_ids: set[str]) -> None:
             del open_lih[lid]
 
 
+def _token_holdings(positions: list[dict]) -> dict[str, float]:
+    """Sum on-chain size per outcome token id."""
+    by_token: dict[str, float] = {}
+    for p in positions:
+        if isinstance(p, dict) and p.get("error"):
+            continue
+        tok = str(p.get("asset") or p.get("tokenId") or p.get("tokenID") or "")
+        size = float(p.get("size") or 0)
+        if tok and size > 0:
+            by_token[tok] = by_token.get(tok, 0.0) + size
+    return by_token
+
+
+def _align_open_lih_from_positions(open_lih: dict, positions: list[dict]) -> int:
+    """Raise yes/no share counts to match chain when bot ledger under-counts fills."""
+    by_token = _token_holdings(positions)
+    if not by_token:
+        return 0
+    fixed = 0
+    for lid, pos in open_lih.items():
+        for leg in ("yes", "no"):
+            tok = str(pos.get(f"{leg}_token_id") or "")
+            if not tok:
+                continue
+            chain = by_token.get(tok)
+            if chain is None:
+                continue
+            key = f"{leg}_shares"
+            old = float(pos.get(key) or 0)
+            if chain <= old + 0.05:
+                continue
+            pos[key] = chain
+            cost_key = f"{leg}_cost"
+            old_cost = float(pos.get(cost_key) or 0)
+            if old > 0 and old_cost > 0:
+                pos[cost_key] = old_cost * (chain / old)
+            avg_key = f"{leg}_entry_price"
+            sh = float(pos.get(key) or 0)
+            if sh > 0:
+                pos[avg_key] = float(pos.get(cost_key) or 0) / sh
+            print(f"chain_align {lid} {leg.upper()} {old:.2f} -> {chain:.2f} (token …{tok[-8:]})")
+            fixed += 1
+    return fixed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--prune-only", action="store_true", help="only drop expired open rows")
@@ -226,6 +271,11 @@ def main() -> int:
         action="store_true",
         help="merge chain slots into existing open_lih_positions instead of replacing",
     )
+    parser.add_argument(
+        "--positions-only",
+        action="store_true",
+        help="fast path: align open slot share counts from chain positions API only",
+    )
     args = parser.parse_args()
 
     if args.prune_only:
@@ -236,6 +286,36 @@ def main() -> int:
         return 0
 
     live_path = Path(os.getenv("LIVE_STATE_PATH", "logs/live_state.json"))
+
+    if args.positions_only:
+        if not live_path.is_file():
+            print("positions_only: no live_state.json")
+            return 0
+        try:
+            doc = json.loads(live_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(f"positions_only: bad json: {exc}", file=sys.stderr)
+            return 1
+        if not isinstance(doc, dict):
+            return 1
+        open_lih = dict(doc.get("open_lih_positions") or {})
+        if not open_lih:
+            print("positions_only: no open slots")
+            return 0
+        positions = fetch_user_positions(limit=500)
+        if positions and isinstance(positions[0], dict) and positions[0].get("error"):
+            print("ERROR positions:", positions[0]["error"], file=sys.stderr)
+            return 1
+        n_align = _align_open_lih_from_positions(open_lih, positions)
+        if n_align:
+            doc["open_lih_positions"] = open_lih
+            doc["saved_at"] = time.time()
+            live_path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"positions_only: aligned {n_align} leg(s) -> {live_path}")
+        else:
+            print("positions_only: chain matches memory (no changes)")
+        return 0
+
     now = time.time()
     pair_sec = _pair_sec()
     trades = fetch_user_trades(limit=80)
@@ -338,6 +418,14 @@ def main() -> int:
 
     if args.merge:
         _drop_stale_recon(open_lih, fresh_ids)
+
+    positions = fetch_user_positions(limit=500)
+    if positions and isinstance(positions[0], dict) and positions[0].get("error"):
+        print("WARN positions:", positions[0]["error"], file=sys.stderr)
+    else:
+        n_align = _align_open_lih_from_positions(open_lih, positions)
+        if n_align:
+            print(f"chain_align: updated {n_align} leg(s) from on-chain positions")
 
     doc["open_lih_positions"] = open_lih
     doc["total_lih_trades"] = max(int(doc.get("total_lih_trades") or 0), len(open_lih))

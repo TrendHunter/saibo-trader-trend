@@ -264,10 +264,11 @@ std::optional<LegInAction> LegInHedgeDetector::evaluate(double now_ms, risk::Ris
                 log_entry_status(market, key, now_sec, q, "other slot active");
                 continue;
             }
-            if (rm.lih_session_leg1_blocked()) {
-                log_entry_status(market, key, now_sec, q, "session leg cap");
-                continue;
-            }
+            // DEBUG single-round test: re-enable session leg cap gate (LIH_SESSION_MAX_LEGS).
+            // if (rm.lih_session_leg1_blocked()) {
+            //     log_entry_status(market, key, now_sec, q, "session leg cap");
+            //     continue;
+            // }
             const bool yes_cheap = q.yes <= leg1_max_price_ + kFloatTol;
             const bool no_cheap = q.no <= leg1_max_price_ + kFloatTol;
             if (!yes_cheap && !no_cheap) {
